@@ -1,0 +1,192 @@
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\herramienta\t9_gamma_stack_subset.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,788,610</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="Convert-Datatype">
+    <operator>Convert-Datatype</operator>
+    <sources>
+      <sourceProduct refid="Collocate"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands>Gamma0_IW1_VH_mst_21Oct2025_M,Gamma0_IW1_VV_mst_21Oct2025_M,Gamma0_IW1_VH_slv1_03Sep2025_M,Gamma0_IW1_VV_slv2_03Sep2025_M,coh_IW1_VH_22Aug2025_03Sep2025_S0,coh_IW1_VV_22Aug2025_03Sep2025_S0,coh_IW1_VH_21Oct2025_02Nov2025_S1,coh_IW1_VV_21Oct2025_02Nov2025_S1</sourceBands>
+      <targetDataType>uint8</targetDataType>
+      <targetScalingStr>Linear (between 95% clipped histogram)</targetScalingStr>
+      <targetNoDataValue>0.0</targetNoDataValue>
+    </parameters>
+  </node>
+  <node id="GLCM">
+    <operator>GLCM</operator>
+    <sources>
+      <sourceProduct refid="Convert-Datatype"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands>Sigma0_VH,Sigma0_VV</sourceBands>
+      <windowSizeStr>11x11</windowSizeStr>
+      <angleStr>ALL</angleStr>
+      <quantizerStr>Probabilistic Quantizer</quantizerStr>
+      <quantizationLevelsStr>32</quantizationLevelsStr>
+      <displacement>4</displacement>
+      <noDataValue>-9999.0</noDataValue>
+      <outputContrast>true</outputContrast>
+      <outputDissimilarity>false</outputDissimilarity>
+      <outputHomogeneity>false</outputHomogeneity>
+      <outputASM>false</outputASM>
+      <outputEnergy>false</outputEnergy>
+      <outputMAX>false</outputMAX>
+      <outputEntropy>false</outputEntropy>
+      <outputMean>true</outputMean>
+      <outputVariance>true</outputVariance>
+      <outputCorrelation>false</outputCorrelation>
+    </parameters>
+  </node>
+  <node id="Read(2)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\herramienta\coh_pre.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,787,610</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="Read(3)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\herramienta\coh_post.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,788,610</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="BandSelect">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="BandMerge"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <selectedSubImages/>
+      <sourceBands>Gamma0_IW1_VH_slv1_03Sep2025_M,Gamma0_IW1_VV_slv2_03Sep2025_M,coh_IW1_VH_22Aug2025_03Sep2025_S0,coh_IW1_VV_22Aug2025_03Sep2025_S0,Gamma0_IW1_VH_slv1_03Sep2025_M_Contrast,Gamma0_IW1_VH_slv1_03Sep2025_M_GLCMMean,Gamma0_IW1_VH_slv1_03Sep2025_M_GLCMVariance,Gamma0_IW1_VV_slv2_03Sep2025_M_Contrast,Gamma0_IW1_VV_slv2_03Sep2025_M_GLCMMean,Gamma0_IW1_VV_slv2_03Sep2025_M_GLCMVariance</sourceBands>
+      <bandNamePattern/>
+      <sourceMasks/>
+      <includeReferences>true</includeReferences>
+    </parameters>
+  </node>
+  <node id="BandMerge">
+    <operator>BandMerge</operator>
+    <sources>
+      <sourceProduct refid="Convert-Datatype"/>
+      <sourceProduct.1 refid="GLCM"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <geographicError>1.0E-5</geographicError>
+    </parameters>
+  </node>
+  <node id="Collocate">
+    <operator>Collocate</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+      <sourceProduct.1 refid="Read(2)"/>
+      <sourceProduct.2 refid="Read(3)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceProductPaths/>
+      <referenceProductName>t9_gamma_stack_subset</referenceProductName>
+      <targetProductName>_collocated</targetProductName>
+      <targetProductType>COLLOCATED</targetProductType>
+      <copySecondaryMetadata>true</copySecondaryMetadata>
+      <renameReferenceComponents>true</renameReferenceComponents>
+      <renameSecondaryComponents>true</renameSecondaryComponents>
+      <referenceComponentPattern>${ORIGINAL_NAME}_M</referenceComponentPattern>
+      <secondaryComponentPattern>${ORIGINAL_NAME}_S${SLAVE_NUMBER_ID}</secondaryComponentPattern>
+      <resamplingType>NEAREST_NEIGHBOUR</resamplingType>
+    </parameters>
+  </node>
+  <node id="BandSelect(2)">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="BandMerge"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <selectedSubImages/>
+      <sourceBands>Gamma0_IW1_VH_mst_21Oct2025_M,Gamma0_IW1_VV_mst_21Oct2025_M,coh_IW1_VH_21Oct2025_02Nov2025_S1,coh_IW1_VV_21Oct2025_02Nov2025_S1,Gamma0_IW1_VH_mst_21Oct2025_M_Contrast,Gamma0_IW1_VH_mst_21Oct2025_M_GLCMMean,Gamma0_IW1_VH_mst_21Oct2025_M_GLCMVariance,Gamma0_IW1_VV_mst_21Oct2025_M_Contrast,Gamma0_IW1_VV_mst_21Oct2025_M_GLCMMean,Gamma0_IW1_VV_mst_21Oct2025_M_GLCMVariance</sourceBands>
+      <bandNamePattern/>
+      <sourceMasks/>
+      <includeReferences>true</includeReferences>
+    </parameters>
+  </node>
+  <node id="Write(2)">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandSelect(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>C:\Users\gbonlieu\Documents\herramienta\post.dim</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandSelect"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>C:\Users\gbonlieu\Documents\herramienta\pre.dim</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description>Brouillon pour orthorectification de SLC 
+</Description>
+    <node id="Read">
+            <displayPosition x="55.0" y="73.0"/>
+    </node>
+    <node id="Convert-Datatype">
+      <displayPosition x="345.0" y="174.0"/>
+    </node>
+    <node id="GLCM">
+      <displayPosition x="482.0" y="225.0"/>
+    </node>
+    <node id="Read(2)">
+      <displayPosition x="56.0" y="171.0"/>
+    </node>
+    <node id="Read(3)">
+      <displayPosition x="54.0" y="263.0"/>
+    </node>
+    <node id="BandSelect">
+      <displayPosition x="704.0" y="113.0"/>
+    </node>
+    <node id="BandMerge">
+      <displayPosition x="555.0" y="175.0"/>
+    </node>
+    <node id="Collocate">
+      <displayPosition x="230.0" y="173.0"/>
+    </node>
+    <node id="BandSelect(2)">
+      <displayPosition x="696.0" y="235.0"/>
+    </node>
+    <node id="Write(2)">
+      <displayPosition x="841.0" y="235.0"/>
+    </node>
+    <node id="Write">
+      <displayPosition x="843.0" y="113.0"/>
+    </node>
+  </applicationData>
+</graph>
