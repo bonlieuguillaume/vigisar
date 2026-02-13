@@ -5,10 +5,10 @@
     <sources/>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <useAdvancedOptions>false</useAdvancedOptions>
-      <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\t9\S1C_IW_SLC__1SDV_20251021T093501_20251021T093527_004658_00935C_19A2.zip</file>
+      <file>C:\Users\gbonlieu\Documents\herramienta\esd.dim</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,73012,13563</pixelRegion>
+      <pixelRegion>0,0,24116,4514</pixelRegion>
       <maskNames/>
     </parameters>
   </node>
