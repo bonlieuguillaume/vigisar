@@ -1,6 +1,8 @@
 name: vigisar
 channels:
   - conda-forge
+
+# -- Manually added dependencies --
 dependencies: 
   # -- Core Python & Jupyter --
   - python=3.11.14

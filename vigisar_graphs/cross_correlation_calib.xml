@@ -5,10 +5,10 @@
     <sources/>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <useAdvancedOptions>false</useAdvancedOptions>
-      <file>C:\Users\guigu\Documents\pro\stage_sertit\herramienta\data_copytemp_hdd\t9\S1C_IW_GRDH_1SDV_20251021T093502_20251021T093527_004658_00935C_ADFF.zip</file>
+      <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\zta7\S1A_IW_SLC__1SDV_20240515T094449_20240515T094517_053880_068C71_C44E.zip</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,26033,16862</pixelRegion>
+      <pixelRegion>0,0,72728,15060</pixelRegion>
       <maskNames/>
     </parameters>
   </node>
@@ -17,18 +17,18 @@
     <sources/>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <useAdvancedOptions>false</useAdvancedOptions>
-      <file>C:\Users\guigu\Documents\pro\stage_sertit\herramienta\data_copytemp_hdd\t9\S1C_IW_GRDH_1SDV_20250903T093506_20250903T093531_003958_007E18_B542.zip</file>
+      <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\zta7\S1A_IW_SLC__1SDV_20241111T094448_20241111T094516_056505_06ED4A_1D4D.zip</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,26123,16861</pixelRegion>
+      <pixelRegion>0,0,72727,15059</pixelRegion>
       <maskNames/>
     </parameters>
   </node>
   <node id="CreateStack">
     <operator>CreateStack</operator>
     <sources>
-      <sourceProduct refid="Calibration(2)"/>
-      <sourceProduct.1 refid="Calibration"/>
+      <sourceProduct refid="TOPSAR-Deburst"/>
+      <sourceProduct.1 refid="TOPSAR-Deburst(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <masterBands/>
@@ -94,8 +94,8 @@
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
       <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
       <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
-      <pixelSpacingInDegree>8.983152841195215E-5</pixelSpacingInDegree>
-      <mapProjection>PROJCS[&quot;UTM Zone 20, South / World Geodetic System 1984&quot;, &#xd;
+      <pixelSpacingInDegree>1.0382554916158415E-5</pixelSpacingInDegree>
+      <mapProjection>PROJCS[&quot;UTM Zone 20 / World Geodetic System 1984&quot;, &#xd;
   GEOGCS[&quot;World Geodetic System 1984&quot;, &#xd;
     DATUM[&quot;World Geodetic System 1984&quot;, &#xd;
       SPHEROID[&quot;WGS 84&quot;, 6378137.0, 298.257223563, AUTHORITY[&quot;EPSG&quot;,&quot;7030&quot;]], &#xd;
@@ -109,7 +109,7 @@
   PARAMETER[&quot;latitude_of_origin&quot;, 0.0], &#xd;
   PARAMETER[&quot;scale_factor&quot;, 0.9996], &#xd;
   PARAMETER[&quot;false_easting&quot;, 500000.0], &#xd;
-  PARAMETER[&quot;false_northing&quot;, 10000000.0], &#xd;
+  PARAMETER[&quot;false_northing&quot;, 0.0], &#xd;
   UNIT[&quot;m&quot;, 1.0], &#xd;
   AXIS[&quot;Easting&quot;, EAST], &#xd;
   AXIS[&quot;Northing&quot;, NORTH]]</mapProjection>
@@ -146,10 +146,24 @@
       <continueOnFail>false</continueOnFail>
     </parameters>
   </node>
+  <node id="TOPSAR-Split">
+    <operator>TOPSAR-Split</operator>
+    <sources>
+      <sourceProduct refid="Apply-Orbit-File"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <subswath>IW3</subswath>
+      <enableSingleSwathMode>false</enableSingleSwathMode>
+      <selectedPolarisations/>
+      <firstBurstIndex>7</firstBurstIndex>
+      <lastBurstIndex>8</lastBurstIndex>
+      <wktAoi/>
+    </parameters>
+  </node>
   <node id="Calibration">
     <operator>Calibration</operator>
     <sources>
-      <sourceProduct refid="Remove-GRD-Border-Noise"/>
+      <sourceProduct refid="ThermalNoiseRemoval"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
@@ -165,6 +179,15 @@
       <outputBetaBand>false</outputBetaBand>
     </parameters>
   </node>
+  <node id="TOPSAR-Deburst">
+    <operator>TOPSAR-Deburst</operator>
+    <sources>
+      <sourceProduct refid="Calibration"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+    </parameters>
+  </node>
   <node id="Apply-Orbit-File(2)">
     <operator>Apply-Orbit-File</operator>
     <sources>
@@ -176,14 +199,28 @@
       <continueOnFail>false</continueOnFail>
     </parameters>
   </node>
+  <node id="TOPSAR-Split(2)">
+    <operator>TOPSAR-Split</operator>
+    <sources>
+      <sourceProduct refid="Apply-Orbit-File(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <subswath>IW3</subswath>
+      <enableSingleSwathMode>false</enableSingleSwathMode>
+      <selectedPolarisations/>
+      <firstBurstIndex>7</firstBurstIndex>
+      <lastBurstIndex>8</lastBurstIndex>
+      <wktAoi/>
+    </parameters>
+  </node>
   <node id="Calibration(2)">
     <operator>Calibration</operator>
     <sources>
-      <sourceProduct refid="Remove-GRD-Border-Noise(2)"/>
+      <sourceProduct refid="ThermalNoiseRemoval(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
-      <auxFile>Product Auxiliary File</auxFile>
+      <auxFile>Latest Auxiliary File</auxFile>
       <externalAuxFile/>
       <outputImageInComplex>false</outputImageInComplex>
       <outputImageScaleInDb>false</outputImageScaleInDb>
@@ -195,29 +232,19 @@
       <outputBetaBand>false</outputBetaBand>
     </parameters>
   </node>
-  <node id="Subset">
-    <operator>Subset</operator>
+  <node id="TOPSAR-Deburst(2)">
+    <operator>TOPSAR-Deburst</operator>
     <sources>
-      <sourceProduct refid="Terrain-Correction"/>
+      <sourceProduct refid="Calibration(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <sourceBands/>
-      <tiePointGrids/>
-      <region>0,0,0,0</region>
-      <referenceBand/>
-      <geoRegion>POLYGON ((-61.22182846069336 -20.715255737304688, -61.1469841003418 -20.715255737304688, -61.1469841003418 -20.76943588256836, -61.22182846069336 -20.76943588256836, -61.22182846069336 -20.715255737304688, -61.22182846069336 -20.715255737304688))</geoRegion>
-      <subSamplingX>1</subSamplingX>
-      <subSamplingY>1</subSamplingY>
-      <fullSwath>false</fullSwath>
-      <vectorFile/>
-      <polygonRegion/>
-      <copyMetadata>true</copyMetadata>
+      <selectedPolarisations/>
     </parameters>
   </node>
   <node id="ThermalNoiseRemoval">
     <operator>ThermalNoiseRemoval</operator>
     <sources>
-      <sourceProduct refid="Apply-Orbit-File(2)"/>
+      <sourceProduct refid="TOPSAR-Split"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <selectedPolarisations/>
@@ -229,35 +256,13 @@
   <node id="ThermalNoiseRemoval(2)">
     <operator>ThermalNoiseRemoval</operator>
     <sources>
-      <sourceProduct refid="Apply-Orbit-File"/>
+      <sourceProduct refid="TOPSAR-Split(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <selectedPolarisations/>
       <removeThermalNoise>true</removeThermalNoise>
       <outputNoise>false</outputNoise>
       <reIntroduceThermalNoise>false</reIntroduceThermalNoise>
-    </parameters>
-  </node>
-  <node id="Remove-GRD-Border-Noise">
-    <operator>Remove-GRD-Border-Noise</operator>
-    <sources>
-      <sourceProduct refid="ThermalNoiseRemoval(2)"/>
-    </sources>
-    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <selectedPolarisations/>
-      <borderLimit>500</borderLimit>
-      <trimThreshold>0.5</trimThreshold>
-    </parameters>
-  </node>
-  <node id="Remove-GRD-Border-Noise(2)">
-    <operator>Remove-GRD-Border-Noise</operator>
-    <sources>
-      <sourceProduct refid="ThermalNoiseRemoval"/>
-    </sources>
-    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <selectedPolarisations/>
-      <borderLimit>500</borderLimit>
-      <trimThreshold>0.5</trimThreshold>
     </parameters>
   </node>
   <node id="Speckle-Filter">
@@ -280,68 +285,93 @@
       <anSize>50</anSize>
     </parameters>
   </node>
+  <node id="Subset">
+    <operator>Subset</operator>
+    <sources>
+      <sourceProduct refid="Terrain-Correction"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <tiePointGrids/>
+      <region>0,0,0,0</region>
+      <referenceBand/>
+      <geoRegion>POLYGON ((-59.844329833984375 8.009617805480957, -59.89841079711914 8.009617805480957, -59.89841079711914 7.963799953460693, -59.844329833984375 7.963799953460693, -59.844329833984375 8.009617805480957, -59.844329833984375 8.009617805480957))</geoRegion>
+      <subSamplingX>1</subSamplingX>
+      <subSamplingY>1</subSamplingY>
+      <fullSwath>false</fullSwath>
+      <vectorFile/>
+      <polygonRegion/>
+      <copyMetadata>true</copyMetadata>
+    </parameters>
+  </node>
   <node id="Write">
     <operator>Write</operator>
     <sources>
       <sourceProduct refid="Subset"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <file>C:\Users\gbonlieu\Documents\herramienta\change_detection_tool\t9_gamma_stack_subset.dim</file>
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta7\zta7_explore\zta7_gamma.dim</file>
       <formatName>BEAM-DIMAP</formatName>
     </parameters>
   </node>
   <applicationData id="Presentation">
     <Description/>
     <node id="Read">
-      <displayPosition x="49.0" y="3.0"/>
+      <displayPosition x="40.0" y="3.0"/>
     </node>
     <node id="Read(2)">
-      <displayPosition x="58.0" y="304.0"/>
+      <displayPosition x="47.0" y="317.0"/>
     </node>
     <node id="CreateStack">
-      <displayPosition x="188.0" y="147.0"/>
+      <displayPosition x="311.0" y="56.0"/>
     </node>
     <node id="Cross-Correlation">
-      <displayPosition x="249.0" y="177.0"/>
+      <displayPosition x="355.0" y="85.0"/>
     </node>
     <node id="Warp">
-      <displayPosition x="323.0" y="206.0"/>
+      <displayPosition x="422.0" y="113.0"/>
     </node>
     <node id="Terrain-Correction">
-      <displayPosition x="380.0" y="264.0"/>
+      <displayPosition x="462.0" y="176.0"/>
     </node>
     <node id="Apply-Orbit-File">
-      <displayPosition x="32.0" y="34.0"/>
+      <displayPosition x="22.0" y="34.0"/>
+    </node>
+    <node id="TOPSAR-Split">
+      <displayPosition x="26.0" y="63.0"/>
     </node>
     <node id="Calibration">
-      <displayPosition x="45.0" y="133.0"/>
+      <displayPosition x="36.0" y="125.0"/>
+    </node>
+    <node id="TOPSAR-Deburst">
+      <displayPosition x="155.0" y="139.0"/>
     </node>
     <node id="Apply-Orbit-File(2)">
-      <displayPosition x="34.0" y="270.0"/>
+      <displayPosition x="23.0" y="286.0"/>
+    </node>
+    <node id="TOPSAR-Split(2)">
+      <displayPosition x="27.0" y="255.0"/>
     </node>
     <node id="Calibration(2)">
-      <displayPosition x="45.0" y="166.0"/>
+      <displayPosition x="37.0" y="193.0"/>
     </node>
-    <node id="Subset">
-      <displayPosition x="450.0" y="292.0"/>
+    <node id="TOPSAR-Deburst(2)">
+      <displayPosition x="142.0" y="168.0"/>
     </node>
     <node id="ThermalNoiseRemoval">
-      <displayPosition x="21.0" y="237.0"/>
+      <displayPosition x="2.0" y="94.0"/>
     </node>
     <node id="ThermalNoiseRemoval(2)">
-      <displayPosition x="5.0" y="66.0"/>
-    </node>
-    <node id="Remove-GRD-Border-Noise">
-      <displayPosition x="0.0" y="99.0"/>
-    </node>
-    <node id="Remove-GRD-Border-Noise(2)">
-      <displayPosition x="2.0" y="201.0"/>
+      <displayPosition x="3.0" y="226.0"/>
     </node>
     <node id="Speckle-Filter">
-      <displayPosition x="356.0" y="235.0"/>
+      <displayPosition x="445.0" y="145.0"/>
+    </node>
+    <node id="Subset">
+      <displayPosition x="523.0" y="210.0"/>
     </node>
     <node id="Write">
-      <displayPosition x="495.0" y="322.0"/>
+      <displayPosition x="550.0" y="242.0"/>
     </node>
   </applicationData>
 </graph>

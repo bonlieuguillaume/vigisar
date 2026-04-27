@@ -1,6 +1,8 @@
 name: vigisar
 channels:
   - conda-forge
+
+# -- All dependencies listed by conda (might not be as portable as the vigisar_env_light yaml present in the repo as well--
 dependencies:
   - _libavif_api=1.3.0
   - _openmp_mutex=4.5

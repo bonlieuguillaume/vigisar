@@ -1,0 +1,135 @@
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta3\zta3_explore\zta3_gamma.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,643,528</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="Read(2)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta3\zta3_explore\zta3_coh_pre.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,643,528</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="Read(3)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta3\zta3_explore\zta3_coh_post.dim</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion>0,0,643,528</pixelRegion>
+      <maskNames/>
+    </parameters>
+  </node>
+  <node id="BandSelect">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="Collocate"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <selectedSubImages/>
+      <sourceBands>Gamma0_IW3_VH_mst_16Nov2018_M,Gamma0_IW3_VV_mst_16Nov2018_M,coh_IW3_VH_16Nov2018_04Nov2018_S0,coh_IW3_VV_16Nov2018_04Nov2018_S0</sourceBands>
+      <bandNamePattern/>
+      <sourceMasks/>
+      <includeReferences>true</includeReferences>
+    </parameters>
+  </node>
+  <node id="Collocate">
+    <operator>Collocate</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+      <sourceProduct.1 refid="Read(2)"/>
+      <sourceProduct.2 refid="Read(3)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceProductPaths/>
+      <referenceProductName>zta3_gamma</referenceProductName>
+      <targetProductName>_collocated</targetProductName>
+      <targetProductType>COLLOCATED</targetProductType>
+      <copySecondaryMetadata>true</copySecondaryMetadata>
+      <renameReferenceComponents>true</renameReferenceComponents>
+      <renameSecondaryComponents>true</renameSecondaryComponents>
+      <referenceComponentPattern>${ORIGINAL_NAME}_M</referenceComponentPattern>
+      <secondaryComponentPattern>${ORIGINAL_NAME}_S${SLAVE_NUMBER_ID}</secondaryComponentPattern>
+      <resamplingType>NEAREST_NEIGHBOUR</resamplingType>
+    </parameters>
+  </node>
+  <node id="BandSelect(2)">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="Collocate"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <selectedSubImages/>
+      <sourceBands>Gamma0_IW3_VH_slv1_08Feb2019_M,Gamma0_IW3_VV_slv2_08Feb2019_M,coh_IW3_VH_08Feb2019_20Feb2019_S1,coh_IW3_VV_08Feb2019_20Feb2019_S1</sourceBands>
+      <bandNamePattern/>
+      <sourceMasks/>
+      <includeReferences>true</includeReferences>
+    </parameters>
+  </node>
+  <node id="Write(2)">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandSelect(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta3\zta3_post.dim</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandSelect"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta3\zta3_pre.dim</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description>Brouillon pour orthorectification de SLC 
+</Description>
+    <node id="Read">
+            <displayPosition x="36.0" y="74.0"/>
+    </node>
+    <node id="Read(2)">
+      <displayPosition x="36.0" y="147.0"/>
+    </node>
+    <node id="Read(3)">
+      <displayPosition x="37.0" y="219.0"/>
+    </node>
+    <node id="BandSelect">
+      <displayPosition x="278.0" y="110.0"/>
+    </node>
+    <node id="Collocate">
+      <displayPosition x="164.0" y="147.0"/>
+    </node>
+    <node id="BandSelect(2)">
+      <displayPosition x="271.0" y="181.0"/>
+    </node>
+    <node id="Write(2)">
+      <displayPosition x="386.0" y="182.0"/>
+    </node>
+    <node id="Write">
+      <displayPosition x="385.0" y="109.0"/>
+    </node>
+  </applicationData>
+</graph>
