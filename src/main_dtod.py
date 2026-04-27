@@ -15,7 +15,7 @@ but the user is free to feed it with any raster he dreams of. It provides all th
   - filter the mask by local density and minimum area of connected components
   - (optionally) write the final mask as a GeoTIFF on disk via `main0`
 
-The main entry point is `main_dtod_0(...)`, which returns the output raster profile
+The main entry point is `main_dtod(...)`, which returns the output raster profile
 and the final binary mask (and can also save it to `out_path` if provided).
 
 """
@@ -485,9 +485,9 @@ def filter_dense_regions(mask: np.ndarray,
     return filt
 
 
-########## MAIN_dtod_0 ##########
+########## MAIN_dtod ##########
 
-def main_dtod_0(path_img1: str, path_img2: str, n: int, k: float = 1.0, closing: bool = False, p: int = 30, d: float = 0.5, a: int = 3000, out_path: str | None = None) -> tuple[dict, np.ndarray]:
+def main_dtod(path_img1: str, path_img2: str, n: int, k: float = 1.0, closing: bool = False, p: int = 30, d: float = 0.5, a: int = 3000, out_path: str | None = None) -> tuple[dict, np.ndarray]:
     """
     ...
     If out_path is not None, writes the raster at the given path out_path
