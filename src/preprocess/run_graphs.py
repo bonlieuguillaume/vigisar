@@ -2,7 +2,13 @@ import subprocess
 import os
 import sys
 import argparse
+import xml.etree.ElementTree as ET
 from typing import Optional
+
+try:
+    from .find_swaths_and_bursts import find_subswath
+except ImportError:
+    from find_swaths_and_bursts import find_subswath  # type: ignore[no-redef]
 
 DEFAULT_GPT = r"C:\Program Files\esa-snap\bin\gpt.exe"
 
@@ -14,6 +20,125 @@ _TEMP_DIR         = os.path.join(_PREPROCESSED_DIR, "temp")
 _GRAPH_BACKSCATTER = os.path.join(_GRAPHS_DIR, "backscatter.xml")
 _GRAPH_COHERENCE   = os.path.join(_GRAPHS_DIR, "coherence.xml")
 _GRAPH_GATHERING   = os.path.join(_GRAPHS_DIR, "gathering.xml")
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _clean_band_name(collocate_name: str) -> str:
+    """Derive a short generic name from a Collocate output band name.
+
+    Examples:
+        Gamma0_IW2_VH_mst_17Aug2017_M  →  gamma0_VH
+        coh_IW2_VV_05Aug2017_17Aug2017_S0  →  coh_VV
+    """
+    pol = "VH" if "_VH_" in collocate_name else ("VV" if "_VV_" in collocate_name else "")
+    if collocate_name.startswith("Gamma0"):
+        return f"gamma0_{pol}" if pol else "gamma0"
+    if collocate_name.startswith("coh"):
+        return f"coh_{pol}" if pol else "coh"
+    return collocate_name
+
+
+def _clean_geotiff(path: str, band_names: list[str]) -> None:
+    """Remove extra flag bands added by SNAP's Collocate (collocationFlags) and
+    rename the remaining bands.
+
+    SNAP's Write operator appends flag bands after data bands regardless of the
+    BandSelect node.  We keep only the first len(band_names) bands and discard
+    the rest, then set the band descriptions in-place.
+    """
+    try:
+        from osgeo import gdal
+    except ImportError:
+        print("Warning: osgeo.gdal not available — band cleanup skipped.", file=sys.stderr)
+        return
+
+    gdal.UseExceptions()
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    ds = gdal.Open(path)
+    gdal.PopErrorHandler()
+    if ds is None:
+        print(f"Warning: could not open {path}.", file=sys.stderr)
+        return
+
+    n_expected = len(band_names)
+    n_actual   = ds.RasterCount
+    ds = None
+
+    if n_actual > n_expected:
+        tmp = path + ".tmp.tif"
+        gdal.PushErrorHandler("CPLQuietErrorHandler")
+        gdal.Translate(tmp, path, bandList=list(range(1, n_expected + 1)))
+        gdal.PopErrorHandler()
+        os.replace(tmp, path)
+
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    ds = gdal.Open(path, gdal.GA_Update)
+    gdal.PopErrorHandler()
+    if ds is None:
+        return
+    for i, name in enumerate(band_names, 1):
+        ds.GetRasterBand(i).SetDescription(name)
+    ds = None
+
+
+def _add_swath_suffix(path: str, swath: str) -> str:
+    """Insert _IW1 / _IW2 / _IW3 before the file extension."""
+    base, ext = os.path.splitext(path)
+    return f"{base}_{swath}{ext}"
+
+
+def _read_dimap_band_names(dim_path: str) -> list[str]:
+    root = ET.parse(dim_path).getroot()
+    return [el.text for el in root.findall(".//Spectral_Band_Info/BAND_NAME")]
+
+
+def _resolve_gathering_bands(
+    input_backscatter: str,
+    input_coh_pre: str,
+    input_coh_post: str,
+) -> tuple[list[str], list[str]]:
+    """
+    Derive which Collocate output bands belong to the pre-event and post-event
+    products by reading band names from the three BEAM-DIMAP inputs.
+
+    Collocate suffix convention (must match the gathering.xml sources order):
+        input_backscatter → reference → ``_M``
+        input_coh_pre     → first secondary → ``_S0``
+        input_coh_post    → second secondary → ``_S1``
+
+    SNAP's CreateStack always writes master bands before slave bands.
+    Since run_backscatter is called with input1=pre2 (master) and input2=post1
+    (slave), the first half of backscatter bands is always pre2 and the second
+    half is always post1 — no date parsing required.
+
+    Returns:
+        (bands_pre, bands_post): lists of band names as they appear after
+        Collocate, ready to be passed as comma-separated sourceBands parameters.
+
+    Raises:
+        ValueError: If the backscatter product does not contain an even number
+            of bands (would indicate something other than one master + one slave).
+    """
+    coh_pre_bands  = _read_dimap_band_names(input_coh_pre)
+    coh_post_bands = _read_dimap_band_names(input_coh_post)
+    bs_bands       = _read_dimap_band_names(input_backscatter)
+
+    n = len(bs_bands)
+    if n % 2 != 0:
+        raise ValueError(
+            f"Expected an even number of bands in the backscatter product "
+            f"(one master image + one slave image), got {n} in {input_backscatter}"
+        )
+    bs_pre  = bs_bands[:n // 2]   # master (pre2) — always listed first by SNAP
+    bs_post = bs_bands[n // 2:]   # slave  (post1) — always listed second
+
+    bands_pre  = [f"{b}_M"  for b in bs_pre]  + [f"{b}_S0" for b in coh_pre_bands]
+    bands_post = [f"{b}_M"  for b in bs_post] + [f"{b}_S1" for b in coh_post_bands]
+
+    return bands_pre, bands_post
 
 
 def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> Optional[str]:
@@ -52,13 +177,17 @@ def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def run_backscatter(
     input1: str,
     input2: str,
+    aoi: str,
     output: Optional[str] = None,
-    aoi: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
-) -> Optional[str]:
+) -> list[Optional[str]]:
     """
     Run the backscatter graph on two Sentinel-1 SLC products.
 
@@ -67,116 +196,159 @@ def run_backscatter(
         → TOPSAR-Deburst → CreateStack → Cross-Correlation → Warp
         → Speckle-Filter → Terrain-Correction → Subset → Write
 
-    The output stack contains Gamma0 bands for both input acquisitions,
-    coregistered to the master (input1) geometry.
-
-    The TOPSAR-Split subswath and burst indices are currently fixed in the XML
-    and must be edited manually there until a dedicated parameter is added.
+    The subswath and burst range are determined automatically from ``aoi`` using
+    ``find_subswath``.  If the AOI spans multiple subswaths the graph is run
+    once per subswath and the outputs are suffixed with the subswath name
+    (e.g. ``backscatter_IW2.dim``).
 
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
+            Should be the pre2 image so that the master bands appear first in the
+            output stack (required by ``run_gathering``).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
-        output (str, optional): Path where the output product should be written (.dim).
+            Should be the post1 image.
+        aoi (str): Area of interest as a WKT polygon in WGS84.  Used both to
+            locate the correct subswath/burst range and to spatially clip the
+            Terrain-Correction output via the Subset node.
+        output (str, optional): Full path for the output product (.dim).
             Defaults to ``data/preprocessed/temp/backscatter.dim``.
-            When omitted, the file is overwritten on each run.
-        aoi (str, optional): Area of interest as a WKT polygon fed to the Subset
-            node (e.g. ``"POLYGON ((lon1 lat1, lon2 lat1, ...))"``).
-            If None the Subset node receives an empty geometry, which causes SNAP
-            to skip spatial clipping and write the full extent.
+            If multiple subswaths are found, the subswath name is inserted before
+            the extension (e.g. ``backscatter_IW2.dim``).
         gpt_path (str): Absolute path to the SNAP GPT executable.
-            Defaults to ``C:\\Program Files\\esa-snap\\bin\\gpt.exe``.
 
     Returns:
-        str: Standard output of the GPT process if successful.
-        None: If the process exits with a non-zero return code.
+        list: One entry per processed subswath (stdout string or None on error).
 
     Raises:
         FileNotFoundError: If gpt_path does not exist.
+        ValueError: If the AOI does not intersect any subswath in input1.
     """
-    if output is None:
-        output = os.path.join(_TEMP_DIR, "backscatter.dim")
-    os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-    params = {
-        "input1": input1,
-        "input2": input2,
-        "output": output,
-        "aoi": aoi if aoi is not None else "",
-    }
-    return _run_gpt(gpt_path, _GRAPH_BACKSCATTER, params)
+    swaths = find_subswath(input1, aoi)
+    if not swaths:
+        raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+
+    base_path = output if output is not None else os.path.join(_TEMP_DIR, "backscatter.dim")
+    os.makedirs(os.path.dirname(os.path.abspath(base_path)), exist_ok=True)
+
+    results = []
+    for swath in swaths:
+        out = _add_swath_suffix(base_path, swath["subswath"]) if len(swaths) > 1 else base_path
+        params = {
+            "input1":      input1,
+            "input2":      input2,
+            "output":      out,
+            "aoi":         aoi,
+            "subswath":    swath["subswath"],
+            "first_burst": str(swath["first_burst"]),
+            "last_burst":  str(swath["last_burst"]),
+        }
+        results.append(_run_gpt(gpt_path, _GRAPH_BACKSCATTER, params))
+
+    return results
 
 
 def run_coherence(
     input1: str,
     input2: str,
-    pair: str,
+    aoi: str,
+    pair: Optional[str] = None,
     output: Optional[str] = None,
-    aoi: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
-) -> Optional[str]:
+) -> list[Optional[str]]:
     """
     Run the coherence graph on two Sentinel-1 SLC products.
-
-    This function must be called twice per full pipeline run: once for the
-    pre-event pair (pre1 + pre2) and once for the post-event pair
-    (post1 + post2).  The ``pair`` argument distinguishes the two runs and
-    is used to build the output filename.
 
     Processing chain:
         Apply-Orbit-File → TOPSAR-Split → Back-Geocoding
         → Enhanced-Spectral-Diversity → Coherence → TOPSAR-Deburst
         → Terrain-Correction → Subset → Write
 
-    The TOPSAR-Split subswath and burst indices are currently fixed in the XML
-    and must be edited manually there until a dedicated parameter is added.
+    The subswath and burst range are determined automatically from ``aoi``.
+    If the AOI spans multiple subswaths the graph is run once per subswath
+    and the subswath name is inserted before the file extension
+    (e.g. ``coherence_pre_IW1.dim``, ``coherence_pre_IW2.dim``).
+
+    Two output modes depending on ``pair``:
+
+    * **No pair** (standalone run): output is written to
+      ``data/preprocessed/default/coh.dim``, or to ``output`` if given as a
+      full path.  Useful for single-date coherence products or exploratory runs.
+
+    * **With pair** (``"pre"`` or ``"post"``): output is written to
+      ``data/preprocessed/temp/coherence_{pair}.dim``.  Use this mode when
+      running the full pipeline (backscatter + coherence pre + coherence post +
+      gathering) so that ``run_gathering`` can locate the files automatically.
 
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
-        pair (str): Event period this pair belongs to — ``"pre"`` for the
-            pre-event pair (pre1 + pre2) or ``"post"`` for the post-event pair
-            (post1 + post2).  Used as a suffix in the output filename.
-        output (str, optional): Base name for the output file.  The pair suffix
-            is always appended, so passing ``"mysite"`` with ``pair="pre"``
-            produces ``data/preprocessed/temp/mysite_pre.dim``.  If None the
-            base name defaults to ``"coherence"``, giving
-            ``data/preprocessed/temp/coherence_pre.dim`` or
-            ``data/preprocessed/temp/coherence_post.dim``.
-        aoi (str, optional): Area of interest as a WKT polygon fed to the Subset
-            node (e.g. ``"POLYGON ((lon1 lat1, lon2 lat1, ...))"``).
-            If None the Subset node receives an empty geometry, which causes SNAP
-            to skip spatial clipping and write the full extent.
+        aoi (str): Area of interest as a WKT polygon in WGS84.
+        pair (str, optional): ``"pre"`` or ``"post"``.  When given, the output is
+            placed in the temp folder with a ``_pre`` / ``_post`` suffix so that
+            ``run_gathering`` can find it.  When omitted, the output goes to
+            ``data/preprocessed/default/coh.dim`` (or the path given in
+            ``output``).
+        output (str, optional):
+            * If ``pair`` is given: base name used in the temp folder filename,
+              e.g. ``"zta1"`` → ``data/preprocessed/temp/zta1_pre.dim``.
+              Defaults to ``"coherence"``.
+            * If ``pair`` is not given: full path to the output file.
+              Defaults to ``data/preprocessed/default/coh.dim``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
-            Defaults to ``C:\\Program Files\\esa-snap\\bin\\gpt.exe``.
 
     Returns:
-        str: Standard output of the GPT process if successful.
-        None: If the process exits with a non-zero return code.
+        list: One entry per processed subswath (stdout string or None on error).
 
     Raises:
         FileNotFoundError: If gpt_path does not exist.
-        ValueError: If pair is not ``"pre"`` or ``"post"``.
+        ValueError: If pair is not ``"pre"``, ``"post"``, or None.
+        ValueError: If the AOI does not intersect any subswath in input1.
     """
-    if pair not in ("pre", "post"):
-        raise ValueError(f"pair must be 'pre' or 'post', got {pair!r}")
-    base = output if output is not None else "coherence"
-    output = os.path.join(_TEMP_DIR, f"{base}_{pair}.dim")
-    os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-    params = {
-        "input1": input1,
-        "input2": input2,
-        "output": output,
-        "aoi": aoi if aoi is not None else "",
-    }
-    return _run_gpt(gpt_path, _GRAPH_COHERENCE, params)
+    if pair is not None and pair not in ("pre", "post"):
+        raise ValueError(f"pair must be 'pre', 'post', or None, got {pair!r}")
+
+    swaths = find_subswath(input1, aoi)
+    if not swaths:
+        raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+
+    if pair is None:
+        if output is None:
+            folder    = os.path.join(_PREPROCESSED_DIR, "default")
+            base_path = os.path.join(folder, "coherence.dim")
+        else:
+            base_path = output
+            folder    = os.path.dirname(os.path.abspath(base_path))
+    else:
+        base_name = output if output is not None else "coherence"
+        folder    = _TEMP_DIR
+        base_path = os.path.join(folder, f"{base_name}_{pair}.dim")
+
+    os.makedirs(folder, exist_ok=True)
+
+    results = []
+    for swath in swaths:
+        out = _add_swath_suffix(base_path, swath["subswath"]) if len(swaths) > 1 else base_path
+        params = {
+            "input1":      input1,
+            "input2":      input2,
+            "output":      out,
+            "aoi":         aoi,
+            "subswath":    swath["subswath"],
+            "first_burst": str(swath["first_burst"]),
+            "last_burst":  str(swath["last_burst"]),
+        }
+        results.append(_run_gpt(gpt_path, _GRAPH_COHERENCE, params))
+
+    return results
 
 
 def run_gathering(
-    input_gamma: str,
+    input_backscatter: str,
     input_coh_pre: str,
     input_coh_post: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
-) -> Optional[str]:
+) -> list[str]:
     """
     Run the gathering graph to collocate a backscatter product with two
     coherence stacks and split the result into pre-event and post-event products.
@@ -185,50 +357,116 @@ def run_gathering(
         3× Read → Collocate → BandSelect → Write (pre)
                            → BandSelect → Write (post)
 
-    Note: The BandSelect nodes have band name lists that are currently fixed in
-    the XML and depend on the acquisition dates encoded in the band names.
-    They must be updated manually in the XML for each new dataset.
+    Band assignment is derived automatically from the BEAM-DIMAP band names
+    of the three inputs — no XML editing required.
 
     Args:
-        input_gamma (str): Path to the Gamma0 backscatter stack (.dim), output
-            of ``run_backscatter``.
+        input_backscatter (str): Path to the backscatter stack (.dim), output of
+            ``run_backscatter``.  input1=pre2 and input2=post1 must have been
+            respected when running the backscatter graph so that master bands
+            (pre2) appear first in the stack.
         input_coh_pre (str): Path to the pre-event coherence product (.dim),
-            output of ``run_coherence`` for the pre-event pair.
+            output of ``run_coherence`` with ``pair="pre"``.
         input_coh_post (str): Path to the post-event coherence product (.dim),
-            output of ``run_coherence`` for the post-event pair.
+            output of ``run_coherence`` with ``pair="post"``.
         output (str, optional): Name for this processing run.  A subfolder with
             that name is created under ``data/preprocessed/`` and the two output
             GeoTIFFs are written there as ``<name>_pre.tif`` and
-            ``<name>_post.tif``.  If None, outputs are written to
+            ``<name>_post.tif``.  If None, outputs go to
             ``data/preprocessed/default/`` as ``pre.tif`` and ``post.tif``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
-            Defaults to ``C:\\Program Files\\esa-snap\\bin\\gpt.exe``.
 
     Returns:
-        str: Standard output of the GPT process if successful.
-        None: If the process exits with a non-zero return code.
+        list[str]: Paths of the GeoTIFF files that were successfully written
+            (``[pre.tif, post.tif]``).  Empty if GPT failed.
 
     Raises:
         FileNotFoundError: If gpt_path does not exist.
     """
     if output is None:
-        folder = os.path.join(_PREPROCESSED_DIR, "default")
+        folder      = os.path.join(_PREPROCESSED_DIR, "default")
         output_pre  = os.path.join(folder, "pre")
         output_post = os.path.join(folder, "post")
     else:
-        folder = os.path.join(_PREPROCESSED_DIR, output)
+        folder      = os.path.join(_PREPROCESSED_DIR, output)
         output_pre  = os.path.join(folder, f"{output}_pre")
         output_post = os.path.join(folder, f"{output}_post")
 
     os.makedirs(folder, exist_ok=True)
+    reference_name = os.path.splitext(os.path.basename(input_backscatter))[0]
+    bands_pre, bands_post = _resolve_gathering_bands(
+        input_backscatter, input_coh_pre, input_coh_post
+    )
     params = {
-        "input1": input_gamma,
-        "input2": input_coh_pre,
-        "input3": input_coh_post,
-        "output_pre": output_pre,
-        "output_post": output_post,
+        "input1":        input_backscatter,
+        "input2":        input_coh_pre,
+        "input3":        input_coh_post,
+        "output_pre":    output_pre,
+        "output_post":   output_post,
+        "reference_name": reference_name,
+        "bands_pre":     ",".join(bands_pre),
+        "bands_post":    ",".join(bands_post),
     }
-    return _run_gpt(gpt_path, _GRAPH_GATHERING, params)
+    _run_gpt(gpt_path, _GRAPH_GATHERING, params)
+
+    produced = []
+    clean_pre  = [_clean_band_name(b) for b in bands_pre]
+    clean_post = [_clean_band_name(b) for b in bands_post]
+    for tif, names in [
+        (output_pre  + ".tif", clean_pre),
+        (output_post + ".tif", clean_post),
+    ]:
+        if os.path.exists(tif):
+            _clean_geotiff(tif, names)
+            produced.append(tif)
+
+    return produced
+
+
+def run_mosaic(inputs: list[str], output: str) -> str:
+    """
+    Merge a list of co-registered GeoTIFFs (one per subswath) into a single file.
+
+    Intended for use after ``run_gathering`` when the AOI spans multiple subswaths:
+    pass the per-swath pre (or post) GeoTIFFs and receive a single mosaicked file.
+
+    If only one input is given the file is copied as-is (no Warp needed).
+
+    Args:
+        inputs (list[str]): Ordered list of GeoTIFF paths to mosaic.
+        output (str): Output GeoTIFF path.
+
+    Returns:
+        str: Path of the written output file (same as ``output``).
+
+    Raises:
+        RuntimeError: If GDAL fails to build the mosaic.
+        ImportError: If osgeo.gdal is not available.
+    """
+    if not inputs:
+        raise ValueError("inputs must not be empty")
+
+    os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
+
+    if len(inputs) == 1:
+        import shutil
+        shutil.copy2(inputs[0], output)
+        return output
+
+    try:
+        from osgeo import gdal
+    except ImportError:
+        raise ImportError("osgeo.gdal is required for mosaicking")
+
+    gdal.UseExceptions()
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    ds = gdal.Warp(output, inputs, format="GTiff", resampleAlg="near")
+    gdal.PopErrorHandler()
+
+    if ds is None:
+        raise RuntimeError(f"Mosaic failed → {output!r}")
+    ds = None
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -265,28 +503,28 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Process two Sentinel-1 SLC acquisitions through orbit correction, "
             "TOPSAR split, thermal noise removal, radiometric calibration, deburst, "
-            "cross-correlation coregistration, speckle filtering, terrain correction, "
-            "and optional spatial subsetting.\n\n"
-            "The output is a BEAM-DIMAP stack containing Gamma0 bands for both "
-            "acquisitions, coregistered to the master (--input1) geometry."
+            "cross-correlation coregistration, speckle filtering, and terrain correction.\n\n"
+            "The subswath and burst range are determined automatically from --aoi.\n"
+            "If the AOI spans multiple subswaths, the graph runs once per subswath\n"
+            "and each output is suffixed with the subswath name (e.g. backscatter_IW2.dim).\n\n"
+            "Pass input1=pre2 and input2=post1 so that the master bands (pre2) appear\n"
+            "first in the output stack, as required by the gathering step."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_bs.add_argument("--input1", required=True, metavar="PATH",
-                      help="Master Sentinel-1 SLC product (.zip or .SAFE)")
+                      help="Master SLC product — should be pre2 (.zip or .SAFE)")
     p_bs.add_argument("--input2", required=True, metavar="PATH",
-                      help="Secondary Sentinel-1 SLC product (.zip or .SAFE)")
+                      help="Secondary SLC product — should be post1 (.zip or .SAFE)")
+    p_bs.add_argument("--aoi", required=True, metavar="WKT",
+                      help=(
+                          "Area of interest as a WKT polygon in WGS84.  Used to locate "
+                          "the correct subswath/burst range and to clip the output."
+                      ))
     p_bs.add_argument("--output", default=None, metavar="PATH",
                       help=(
-                          "Output product path (.dim). "
-                          "Defaults to data/preprocessed/temp/backscatter.dim "
-                          "(overwritten on each run if omitted)."
-                      ))
-    p_bs.add_argument("--aoi", default=None, metavar="WKT",
-                      help=(
-                          "Area of interest as a WKT polygon passed to the Subset node "
-                          "(e.g. \"POLYGON ((lon1 lat1, lon2 lat1, ...))\"). "
-                          "Omit to skip spatial clipping."
+                          "Output product path (.dim).  "
+                          "Defaults to data/preprocessed/temp/backscatter[_IWx].dim."
                       ))
 
     # -- coherence -----------------------------------------------------------
@@ -297,30 +535,40 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Process two Sentinel-1 SLC acquisitions through orbit correction, "
             "TOPSAR split, back-geocoding, Enhanced Spectral Diversity, coherence "
-            "estimation, deburst, terrain correction, and optional spatial subsetting."
+            "estimation, deburst, terrain correction, and spatial clipping.\n\n"
+            "The subswath and burst range are determined automatically from --aoi.\n"
+            "If the AOI spans multiple subswaths the graph runs once per subswath\n"
+            "and each output is suffixed with its name (e.g. coherence_pre_IW2.dim).\n\n"
+            "Two output modes:\n"
+            "  No --pair : standalone run → data/preprocessed/default/coh[_IWx].dim\n"
+            "              (or the path given with --output)\n"
+            "  --pair pre/post : pipeline run → data/preprocessed/temp/coherence_pre[_IWx].dim\n"
+            "              Use this mode when the output will be fed into gathering."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_coh.add_argument("--input1", required=True, metavar="PATH",
-                       help="Master Sentinel-1 SLC product (.zip or .SAFE)")
+                       help="Master SLC product (.zip or .SAFE)")
     p_coh.add_argument("--input2", required=True, metavar="PATH",
-                       help="Secondary Sentinel-1 SLC product (.zip or .SAFE)")
-    p_coh.add_argument("--pair", required=True, choices=["pre", "post"],
+                       help="Secondary SLC product (.zip or .SAFE)")
+    p_coh.add_argument("--aoi", required=True, metavar="WKT",
+                       help="Area of interest as a WKT polygon in WGS84.")
+    p_coh.add_argument("--pair", default=None, choices=["pre", "post"],
                        help=(
-                           "Event period this pair belongs to: 'pre' for the pre-event "
-                           "pair (pre1 + pre2), 'post' for the post-event pair (post1 + post2)."
+                           "Event period: 'pre' (pre1+pre2) or 'post' (post1+post2).  "
+                           "When given, the output goes to data/preprocessed/temp/ with "
+                           "a _pre/_post suffix so that gathering can locate it.  "
+                           "Omit for a standalone coherence run."
                        ))
-    p_coh.add_argument("--output", default=None, metavar="NAME",
+    p_coh.add_argument("--output", default=None, metavar="NAME_OR_PATH",
                        help=(
-                           "Base name for the output file.  The pair suffix is always appended: "
-                           "'mysite' + --pair pre → data/preprocessed/temp/mysite_pre.dim.  "
-                           "Defaults to 'coherence', giving coherence_pre.dim or coherence_post.dim."
-                       ))
-    p_coh.add_argument("--aoi", default=None, metavar="WKT",
-                       help=(
-                           "Area of interest as a WKT polygon passed to the Subset node "
-                           "(e.g. \"POLYGON ((lon1 lat1, lon2 lat1, ...))\"). "
-                           "Omit to skip spatial clipping."
+                           "With --pair: base name in the temp folder "
+                           "(e.g. 'zta1' → temp/zta1_pre.dim). "
+                           "Without --pair: full output path "
+                           "(default: data/preprocessed/default/coherence.dim). "
+                           "In both modes, if the AOI spans multiple subswaths the "
+                           "subswath name is inserted before the extension "
+                           "(e.g. coherence_IW1.dim, coherence_IW2.dim)."
                        ))
 
     # -- gathering -----------------------------------------------------------
@@ -329,27 +577,25 @@ def _build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Collocate backscatter and coherence stacks into pre/post GeoTIFFs",
         description=(
-            "Collocate a Gamma0 backscatter stack with a pre-event and a post-event "
-            "coherence product, then split the result into two GeoTIFF files named "
-            "<output>_pre.tif and <output>_post.tif.\n\n"
-            "Note: the BandSelect nodes inside the XML have band name lists that are "
-            "dataset-specific and must be updated manually in the XML for each new "
-            "dataset (acquisition dates are encoded in the band names)."
+            "Collocate a backscatter stack with a pre-event and a post-event "
+            "coherence product, then split the result into two GeoTIFF files.\n\n"
+            "Intended for use after running backscatter + coherence --pair pre + "
+            "coherence --pair post on the same AOI.  Band assignment is derived "
+            "automatically from the BEAM-DIMAP band names."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_ga.add_argument("--input-gamma", required=True, metavar="PATH",
-                      help="Gamma0 backscatter stack (.dim), output of the backscatter graph")
+    p_ga.add_argument("--input-backscatter", required=True, metavar="PATH",
+                      help="Backscatter stack (.dim), output of the backscatter graph")
     p_ga.add_argument("--input-coh-pre", required=True, metavar="PATH",
-                      help="Pre-event coherence product (.dim), output of the coherence graph")
+                      help="Pre-event coherence (.dim), output of coherence --pair pre")
     p_ga.add_argument("--input-coh-post", required=True, metavar="PATH",
-                      help="Post-event coherence product (.dim), output of the coherence graph")
+                      help="Post-event coherence (.dim), output of coherence --pair post")
     p_ga.add_argument("--output", default=None, metavar="NAME",
                       help=(
-                          "Name for this processing run.  A subfolder data/preprocessed/<name>/ "
-                          "is created and the outputs are written as <name>_pre.tif and "
-                          "<name>_post.tif inside it.  "
-                          "Omit to write pre.tif and post.tif into data/preprocessed/default/."
+                          "Run name.  Creates data/preprocessed/<name>/ and writes "
+                          "<name>_pre.tif and <name>_post.tif inside it.  "
+                          "Defaults to data/preprocessed/default/pre.tif and post.tif."
                       ))
 
     return parser
@@ -363,22 +609,22 @@ def main():
         run_backscatter(
             input1=args.input1,
             input2=args.input2,
-            output=args.output,
             aoi=args.aoi,
+            output=args.output,
             gpt_path=args.gpt,
         )
     elif args.command == "coherence":
         run_coherence(
             input1=args.input1,
             input2=args.input2,
+            aoi=args.aoi,
             pair=args.pair,
             output=args.output,
-            aoi=args.aoi,
             gpt_path=args.gpt,
         )
     elif args.command == "gathering":
         run_gathering(
-            input_gamma=args.input_gamma,
+            input_backscatter=args.input_backscatter,
             input_coh_pre=args.input_coh_pre,
             input_coh_post=args.input_coh_post,
             output=args.output,

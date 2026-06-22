@@ -31,12 +31,11 @@
       <sourceProduct refid="Apply-Orbit-File"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <subswath>IW3</subswath>
+      <subswath>${subswath}</subswath>
       <enableSingleSwathMode>false</enableSingleSwathMode>
       <selectedPolarisations/>
-      <firstBurstIndex>7</firstBurstIndex>
-      <lastBurstIndex>8</lastBurstIndex>
-      <wktAoi/>
+      <firstBurstIndex>${first_burst}</firstBurstIndex>
+      <lastBurstIndex>${last_burst}</lastBurstIndex>
     </parameters>
   </node>
   <node id="ThermalNoiseRemoval">
@@ -110,12 +109,11 @@
       <sourceProduct refid="Apply-Orbit-File(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <subswath>IW3</subswath>
+      <subswath>${subswath}</subswath>
       <enableSingleSwathMode>false</enableSingleSwathMode>
       <selectedPolarisations/>
-      <firstBurstIndex>7</firstBurstIndex>
-      <lastBurstIndex>8</lastBurstIndex>
-      <wktAoi/>
+      <firstBurstIndex>${first_burst}</firstBurstIndex>
+      <lastBurstIndex>${last_burst}</lastBurstIndex>
     </parameters>
   </node>
   <node id="ThermalNoiseRemoval(2)">

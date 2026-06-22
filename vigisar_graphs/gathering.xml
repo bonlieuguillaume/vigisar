@@ -49,7 +49,7 @@
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceProductPaths/>
-      <referenceProductName>zta3_gamma</referenceProductName>
+      <referenceProductName>${reference_name}</referenceProductName>
       <targetProductName>_collocated</targetProductName>
       <targetProductType>COLLOCATED</targetProductType>
       <copySecondaryMetadata>true</copySecondaryMetadata>
@@ -62,6 +62,8 @@
   </node>
 
   <!-- Output branch: pre-event -->
+  <!-- Selects: pre-event coherence (backscatter _S0) + pre2 backscatter (master _mst_ _M) -->
+  <!-- Pattern works regardless of acquisition dates or subswath -->
   <node id="BandSelect">
     <operator>BandSelect</operator>
     <sources>
@@ -70,10 +72,10 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <selectedPolarisations/>
       <selectedSubImages/>
-      <sourceBands>Gamma0_IW3_VH_mst_16Nov2018_M,Gamma0_IW3_VV_mst_16Nov2018_M,coh_IW3_VH_16Nov2018_04Nov2018_S0,coh_IW3_VV_16Nov2018_04Nov2018_S0</sourceBands>
+      <sourceBands>${bands_pre}</sourceBands>
       <bandNamePattern/>
       <sourceMasks/>
-      <includeReferences>true</includeReferences>
+      <includeReferences>false</includeReferences>
     </parameters>
   </node>
   <node id="Write">
@@ -88,6 +90,8 @@
   </node>
 
   <!-- Output branch: post-event -->
+  <!-- Selects: post-event coherence (backscatter _S1) + post1 backscatter (slave _slv_ _M) -->
+  <!-- Pattern works regardless of acquisition dates or subswath -->
   <node id="BandSelect(2)">
     <operator>BandSelect</operator>
     <sources>
@@ -96,10 +100,10 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <selectedPolarisations/>
       <selectedSubImages/>
-      <sourceBands>Gamma0_IW3_VH_slv1_08Feb2019_M,Gamma0_IW3_VV_slv2_08Feb2019_M,coh_IW3_VH_08Feb2019_20Feb2019_S1,coh_IW3_VV_08Feb2019_20Feb2019_S1</sourceBands>
+      <sourceBands>${bands_post}</sourceBands>
       <bandNamePattern/>
       <sourceMasks/>
-      <includeReferences>true</includeReferences>
+      <includeReferences>false</includeReferences>
     </parameters>
   </node>
   <node id="Write(2)">
