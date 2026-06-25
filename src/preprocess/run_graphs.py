@@ -387,6 +387,13 @@ def run_gathering(
         folder      = os.path.join(_PREPROCESSED_DIR, "default")
         output_pre  = os.path.join(folder, "pre")
         output_post = os.path.join(folder, "post")
+    elif os.sep in output or "/" in output:
+        # Full path prefix — caller controls the directory (used by main_preprocess
+        # in multi-swath mode to keep all swath files in the same folder).
+        folder      = os.path.dirname(os.path.abspath(output))
+        stem        = os.path.basename(output)
+        output_pre  = os.path.join(folder, f"{stem}_pre")
+        output_post = os.path.join(folder, f"{stem}_post")
     else:
         folder      = os.path.join(_PREPROCESSED_DIR, output)
         output_pre  = os.path.join(folder, f"{output}_pre")
@@ -519,7 +526,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_bs.add_argument("--aoi", required=True, metavar="WKT",
                       help=(
                           "Area of interest as a WKT polygon in WGS84.  Used to locate "
-                          "the correct subswath/burst range and to clip the output."
+                          'the correct subswath/burst range and to clip the output.  '
+                          'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                       ))
     p_bs.add_argument("--output", default=None, metavar="PATH",
                       help=(
@@ -552,7 +560,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_coh.add_argument("--input2", required=True, metavar="PATH",
                        help="Secondary SLC product (.zip or .SAFE)")
     p_coh.add_argument("--aoi", required=True, metavar="WKT",
-                       help="Area of interest as a WKT polygon in WGS84.")
+                       help=(
+                           "Area of interest as a WKT polygon in WGS84.  "
+                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                       ))
     p_coh.add_argument("--pair", default=None, choices=["pre", "post"],
                        help=(
                            "Event period: 'pre' (pre1+pre2) or 'post' (post1+post2).  "

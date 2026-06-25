@@ -76,14 +76,22 @@ def find_subswath(product_path: str, aoi_wkt: str) -> list[dict]:
         lines_per_burst = int(root.find(".//linesPerBurst").text)
         n_bursts = len(root.findall(".//burst"))
 
+        # The geolocation grid step equals linesPerBurst, so each burst contains
+        # exactly one grid row (at its northern boundary).  A single row forms a
+        # degenerate LineString hull that reliably misses edge bursts.
+        # Fix: include BOTH boundary rows of each burst — the row at its start
+        # (i * linesPerBurst) AND the row at the start of the next burst
+        # ((i+1) * linesPerBurst).  Two rows form a proper polygon that covers
+        # the full geographic extent of the burst.  The boundary row is shared
+        # with the adjacent burst, which is intentional and correct.
         first_burst = last_burst = None
         for i in range(n_bursts):
-            start = i * lines_per_burst
-            end = (i + 1) * lines_per_burst
+            start    = i * lines_per_burst
+            end_row  = (i + 1) * lines_per_burst
             burst_pts = [
                 (lon, lat)
                 for lon, lat, ln in grid_points
-                if start <= ln < end
+                if start <= ln <= end_row  # inclusive: captures both boundary rows
             ]
             if len(burst_pts) < 3:
                 continue
@@ -96,7 +104,7 @@ def find_subswath(product_path: str, aoi_wkt: str) -> list[dict]:
             results.append({
                 "subswath": iw,
                 "first_burst": first_burst,
-                "last_burst": last_burst,
+                "last_burst":  last_burst,
             })
 
     return results
@@ -160,7 +168,7 @@ def main():
         "--aoi",
         required=True,
         metavar="WKT",
-        help='Area of interest as a WKT polygon in WGS84 (e.g. "POLYGON ((-54.1 4.1, ...))")',
+        help='Area of interest as a WKT polygon in WGS84 (must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))")',
     )
     args = parser.parse_args()
 

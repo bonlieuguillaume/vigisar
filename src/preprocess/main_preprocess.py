@@ -76,7 +76,10 @@ def main_preprocess(
     run_coherence(pre1, pre2,   aoi, pair="pre",  gpt_path=gpt_path)
     run_coherence(post1, post2, aoi, pair="post", gpt_path=gpt_path)
 
-    # 5. Gathering — one call per swath to avoid output name collisions
+    # 5. Gathering — all outputs go into the same output_name/ folder
+    out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
+    os.makedirs(out_dir, exist_ok=True)
+
     pre_tifs:  list[str] = []
     post_tifs: list[str] = []
 
@@ -88,10 +91,11 @@ def main_preprocess(
         coh_pre_path  = os.path.join(_TEMP_DIR, f"coherence_pre{suffix}.dim")
         coh_post_path = os.path.join(_TEMP_DIR, f"coherence_post{suffix}.dim")
 
-        # In multi-swath mode use a per-swath subfolder so outputs don't overwrite
-        gather_name = f"{output_name}{suffix}" if multi else output_name
+        # Pass a full path prefix so run_gathering writes directly into out_dir
+        # (single-swath: zta1/zta1, multi-swath: zta1/zta1_IW1, zta1/zta1_IW2)
+        gather_prefix = os.path.join(out_dir, f"{output_name}{suffix}")
         tifs = run_gathering(bs_path, coh_pre_path, coh_post_path,
-                             output=gather_name, gpt_path=gpt_path)
+                             output=gather_prefix, gpt_path=gpt_path)
 
         if len(tifs) >= 1:
             pre_tifs.append(tifs[0])
@@ -102,9 +106,7 @@ def main_preprocess(
     if not multi:
         return {"pre": pre_tifs[0], "post": post_tifs[0]}
 
-    # Multi-swath: mosaic the per-swath tiles into the top-level output folder
-    out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
-    os.makedirs(out_dir, exist_ok=True)
+    # Multi-swath: mosaic the per-swath tiles (all already in out_dir)
 
     final_pre  = os.path.join(out_dir, f"{output_name}_pre.tif")
     final_post = os.path.join(out_dir, f"{output_name}_post.tif")
@@ -145,7 +147,10 @@ def main():
     parser.add_argument("--post1",  required=True, metavar="PATH")
     parser.add_argument("--post2",  required=True, metavar="PATH")
     parser.add_argument("--aoi",    required=True, metavar="WKT",
-                        help="Area of interest as a WKT polygon in WGS84")
+                        help=(
+                            "Area of interest as a WKT polygon in WGS84.  "
+                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                        ))
     parser.add_argument("--output", required=True, metavar="NAME",
                         help="Run label — creates data/preprocessed/<NAME>/")
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
