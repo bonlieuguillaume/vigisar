@@ -17,9 +17,10 @@ _GRAPHS_DIR       = os.path.join(_PROJECT_ROOT, "vigisar_graphs")
 _PREPROCESSED_DIR = os.path.join(_PROJECT_ROOT, "data", "preprocessed")
 _TEMP_DIR         = os.path.join(_PREPROCESSED_DIR, "temp")
 
-_GRAPH_BACKSCATTER = os.path.join(_GRAPHS_DIR, "backscatter.xml")
-_GRAPH_COHERENCE   = os.path.join(_GRAPHS_DIR, "coherence.xml")
-_GRAPH_GATHERING   = os.path.join(_GRAPHS_DIR, "gathering.xml")
+_GRAPH_BACKSCATTER     = os.path.join(_GRAPHS_DIR, "backscatter.xml")
+_GRAPH_COHERENCE       = os.path.join(_GRAPHS_DIR, "coherence.xml")
+_GRAPH_GATHERING       = os.path.join(_GRAPHS_DIR, "gathering.xml")
+_GRAPH_BACKSCATTER_GRD = os.path.join(_GRAPHS_DIR, "backscatter_grd.xml")
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +431,138 @@ def run_gathering(
     return produced
 
 
+def _split_grd_stack(dim_path: str, pre_path: str, post_path: str) -> list[str]:
+    """
+    Split a coregistered GRD stack (BEAM-DIMAP) into two GeoTIFFs.
+
+    SNAP's CreateStack writes master bands before slave bands.  Since
+    run_backscatter_grd is always called with input1=pre (master) and
+    input2=post (slave), the first half of bands is pre and the second half
+    is post — no date parsing required.
+
+    Band names are read from the DIMAP XML.  If the "_mst" / "_slv" suffixes
+    are present they are used to identify each group; otherwise the bands are
+    split by position (first half / second half).
+    """
+    try:
+        from osgeo import gdal
+    except ImportError:
+        print("Warning: osgeo.gdal not available — cannot split GRD stack.", file=sys.stderr)
+        return []
+
+    gdal.UseExceptions()
+
+    band_names = _read_dimap_band_names(dim_path)
+    n = len(band_names)
+
+    mst_idx = [i + 1 for i, name in enumerate(band_names) if "_mst" in name.lower()]
+    slv_idx = [i + 1 for i, name in enumerate(band_names) if "_slv" in name.lower()]
+
+    if not mst_idx or not slv_idx:
+        if n % 2 != 0:
+            raise ValueError(
+                f"Cannot split GRD stack: odd number of bands ({n}) in {dim_path}"
+            )
+        half = n // 2
+        mst_idx = list(range(1, half + 1))
+        slv_idx = list(range(half + 1, n + 1))
+
+    mst_names = [_clean_band_name(band_names[i - 1]) for i in mst_idx]
+    slv_names = [_clean_band_name(band_names[i - 1]) for i in slv_idx]
+
+    produced = []
+    for path, indices, names in [
+        (pre_path,  mst_idx, mst_names),
+        (post_path, slv_idx, slv_names),
+    ]:
+        gdal.PushErrorHandler("CPLQuietErrorHandler")
+        gdal.Translate(path, dim_path, bandList=indices, format="GTiff")
+        gdal.PopErrorHandler()
+        if os.path.exists(path):
+            _clean_geotiff(path, names)
+            produced.append(path)
+
+    return produced
+
+
+def run_backscatter_grd(
+    pre: str,
+    post: str,
+    aoi: str,
+    output: Optional[str] = None,
+    gpt_path: str = DEFAULT_GPT,
+) -> list[str]:
+    """
+    Run the GRD backscatter graph on two Sentinel-1 GRD products and write
+    two separate GeoTIFFs (pre-event and post-event).
+
+    Processing chain (single graph, both images together):
+        Apply-Orbit-File → ThermalNoiseRemoval → Remove-GRD-Border-Noise
+        → Calibration (×2) → CreateStack → Cross-Correlation → Warp
+        → Speckle-Filter → Terrain-Correction → Subset → Write
+
+    The two images are coregistered via Cross-Correlation + Warp so that they
+    lie on the same pixel grid.  The output BEAM-DIMAP stack is then split
+    into two GeoTIFFs: the master bands (pre) and the slave bands (post).
+
+    Unlike the SLC pipeline there is no subswath/burst splitting — GRD products
+    already cover the full swath and do not require TOPSAR-Split.
+
+    Args:
+        pre (str): Path to the pre-event Sentinel-1 GRD product (.zip or .SAFE).
+            Used as the master image (reference for coregistration).
+        post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
+            Used as the slave image.
+        aoi (str): Area of interest as a WKT polygon in WGS84.  Used to clip
+            the output after terrain correction.
+        output (str, optional): Controls where the two output GeoTIFFs are written.
+            Follows the same convention as ``run_gathering``:
+
+            * ``None``          → ``data/preprocessed/default/pre.tif`` and ``post.tif``
+            * Simple name       → ``data/preprocessed/<name>/<name>_pre.tif`` and ``_post.tif``
+            * Full path prefix  → ``<prefix>_pre.tif`` and ``<prefix>_post.tif``
+              (the folder must already exist or will be created)
+        gpt_path (str): Absolute path to the SNAP GPT executable.
+
+    Returns:
+        list[str]: Paths of the two GeoTIFFs that were successfully written
+            (``[pre.tif, post.tif]``).  Empty if GPT failed.
+
+    Raises:
+        FileNotFoundError: If gpt_path does not exist.
+    """
+    if output is None:
+        folder      = os.path.join(_PREPROCESSED_DIR, "default")
+        output_pre  = os.path.join(folder, "pre.tif")
+        output_post = os.path.join(folder, "post.tif")
+    elif os.sep in output or "/" in output:
+        folder      = os.path.dirname(os.path.abspath(output))
+        stem        = os.path.basename(output)
+        output_pre  = os.path.join(folder, f"{stem}_pre.tif")
+        output_post = os.path.join(folder, f"{stem}_post.tif")
+    else:
+        folder      = os.path.join(_PREPROCESSED_DIR, output)
+        output_pre  = os.path.join(folder, f"{output}_pre.tif")
+        output_post = os.path.join(folder, f"{output}_post.tif")
+
+    os.makedirs(folder, exist_ok=True)
+
+    tmp_dim = os.path.join(_TEMP_DIR, "backscatter_grd.dim")
+    os.makedirs(_TEMP_DIR, exist_ok=True)
+
+    _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
+        "input1": pre,
+        "input2": post,
+        "aoi":    aoi,
+        "output": tmp_dim,
+    })
+
+    if not os.path.exists(tmp_dim):
+        return []
+
+    return _split_grd_stack(tmp_dim, output_pre, output_post)
+
+
 def run_mosaic(inputs: list[str], output: str) -> str:
     """
     Merge a list of co-registered GeoTIFFs (one per subswath) into a single file.
@@ -484,10 +617,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run SNAP GPT preprocessing graphs for the Vigisar pipeline.\n\n"
-            "Three subcommands are available, one per processing graph:\n"
-            "  backscatter  — Gamma0 backscatter via cross-correlation coregistration\n"
-            "  coherence    — coherence via ESD coregistration\n"
-            "  gathering    — collocate backscatter + coherence into pre/post products\n"
+            "Subcommands (SLC pipeline):\n"
+            "  backscatter      — Gamma0 backscatter via cross-correlation coregistration\n"
+            "  coherence        — coherence via ESD coregistration\n"
+            "  gathering        — collocate backscatter + coherence into pre/post products\n\n"
+            "Subcommands (GRD pipeline):\n"
+            "  backscatter-grd  — Gamma0 backscatter from two GRD products (no subswath split)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -609,6 +744,39 @@ def _build_parser() -> argparse.ArgumentParser:
                           "Defaults to data/preprocessed/default/pre.tif and post.tif."
                       ))
 
+    # -- backscatter-grd -----------------------------------------------------
+    p_grd = subparsers.add_parser(
+        "backscatter-grd",
+        parents=[common],
+        help="Gamma0 backscatter from two GRD products (no subswath split required)",
+        description=(
+            "Process two Sentinel-1 GRD acquisitions through orbit correction, thermal\n"
+            "noise removal, border noise removal, radiometric calibration, cross-correlation\n"
+            "coregistration, speckle filtering, terrain correction, and spatial clipping.\n\n"
+            "Both images are processed together in a single graph run.  The output is split\n"
+            "into two GeoTIFFs: <name>_pre.tif (master/pre image) and <name>_post.tif\n"
+            "(slave/post image), each with Gamma0_VH and Gamma0_VV bands.\n\n"
+            "Unlike the SLC pipeline there is no subswath/burst detection step — GRD products\n"
+            "already cover the full swath."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_grd.add_argument("--pre",    required=True, metavar="PATH",
+                       help="[required] Pre-event GRD product (.zip or .SAFE) — used as master")
+    p_grd.add_argument("--post",   required=True, metavar="PATH",
+                       help="[required] Post-event GRD product (.zip or .SAFE) — used as slave")
+    p_grd.add_argument("--aoi",    required=True, metavar="WKT",
+                       help=(
+                           "[required] Area of interest as a WKT polygon in WGS84.  "
+                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                       ))
+    p_grd.add_argument("--output", default=None, metavar="NAME",
+                       help=(
+                           "[optional] Run name.  Creates data/preprocessed/<name>/ and writes "
+                           "<name>_pre.tif and <name>_post.tif inside it.  "
+                           "If omitted, writes pre.tif and post.tif to data/preprocessed/default/."
+                       ))
+
     return parser
 
 
@@ -641,6 +809,16 @@ def main():
             output=args.output,
             gpt_path=args.gpt,
         )
+    elif args.command == "backscatter-grd":
+        tifs = run_backscatter_grd(
+            pre=args.pre,
+            post=args.post,
+            aoi=args.aoi,
+            output=args.output,
+            gpt_path=args.gpt,
+        )
+        for path in tifs:
+            print(path)
 
 
 if __name__ == "__main__":
