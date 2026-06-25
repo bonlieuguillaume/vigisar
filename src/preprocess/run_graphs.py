@@ -497,7 +497,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gpt",
         default=DEFAULT_GPT,
         metavar="PATH",
-        help=f"Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})",
+        help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -520,18 +520,18 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_bs.add_argument("--input1", required=True, metavar="PATH",
-                      help="Master SLC product — should be pre2 (.zip or .SAFE)")
+                      help="[required] Master SLC product — should be pre2 (.zip or .SAFE)")
     p_bs.add_argument("--input2", required=True, metavar="PATH",
-                      help="Secondary SLC product — should be post1 (.zip or .SAFE)")
+                      help="[required] Secondary SLC product — should be post1 (.zip or .SAFE)")
     p_bs.add_argument("--aoi", required=True, metavar="WKT",
                       help=(
-                          "Area of interest as a WKT polygon in WGS84.  Used to locate "
+                          "[required] Area of interest as a WKT polygon in WGS84.  Used to locate "
                           'the correct subswath/burst range and to clip the output.  '
                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                       ))
     p_bs.add_argument("--output", default=None, metavar="PATH",
                       help=(
-                          "Output product path (.dim).  "
+                          "[optional] Output product path (.dim).  "
                           "Defaults to data/preprocessed/temp/backscatter[_IWx].dim."
                       ))
 
@@ -556,24 +556,24 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_coh.add_argument("--input1", required=True, metavar="PATH",
-                       help="Master SLC product (.zip or .SAFE)")
+                       help="[required] Master SLC product (.zip or .SAFE)")
     p_coh.add_argument("--input2", required=True, metavar="PATH",
-                       help="Secondary SLC product (.zip or .SAFE)")
+                       help="[required] Secondary SLC product (.zip or .SAFE)")
     p_coh.add_argument("--aoi", required=True, metavar="WKT",
                        help=(
-                           "Area of interest as a WKT polygon in WGS84.  "
+                           "[required] Area of interest as a WKT polygon in WGS84.  "
                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                        ))
     p_coh.add_argument("--pair", default=None, choices=["pre", "post"],
                        help=(
-                           "Event period: 'pre' (pre1+pre2) or 'post' (post1+post2).  "
+                           "[optional] Event period: 'pre' (pre1+pre2) or 'post' (post1+post2).  "
                            "When given, the output goes to data/preprocessed/temp/ with "
                            "a _pre/_post suffix so that gathering can locate it.  "
                            "Omit for a standalone coherence run."
                        ))
     p_coh.add_argument("--output", default=None, metavar="NAME_OR_PATH",
                        help=(
-                           "With --pair: base name in the temp folder "
+                           "[optional] With --pair: base name in the temp folder "
                            "(e.g. 'zta1' → temp/zta1_pre.dim). "
                            "Without --pair: full output path "
                            "(default: data/preprocessed/default/coherence.dim). "
@@ -597,14 +597,14 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_ga.add_argument("--input-backscatter", required=True, metavar="PATH",
-                      help="Backscatter stack (.dim), output of the backscatter graph")
+                      help="[required] Backscatter stack (.dim), output of the backscatter graph")
     p_ga.add_argument("--input-coh-pre", required=True, metavar="PATH",
-                      help="Pre-event coherence (.dim), output of coherence --pair pre")
+                      help="[required] Pre-event coherence (.dim), output of coherence --pair pre")
     p_ga.add_argument("--input-coh-post", required=True, metavar="PATH",
-                      help="Post-event coherence (.dim), output of coherence --pair post")
+                      help="[required] Post-event coherence (.dim), output of coherence --pair post")
     p_ga.add_argument("--output", default=None, metavar="NAME",
                       help=(
-                          "Run name.  Creates data/preprocessed/<name>/ and writes "
+                          "[optional] Run name.  Creates data/preprocessed/<name>/ and writes "
                           "<name>_pre.tif and <name>_post.tif inside it.  "
                           "Defaults to data/preprocessed/default/pre.tif and post.tif."
                       ))

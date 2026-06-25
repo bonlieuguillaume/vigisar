@@ -487,7 +487,7 @@ def filter_dense_regions(mask: np.ndarray,
 
 ########## MAIN_dtod ##########
 
-def main_dtod(path_img1: str, path_img2: str, n: int, k: float = 1.0, closing: bool = False, p: int = 30, d: float = 0.5, a: int = 3000, out_path: str | None = None) -> tuple[dict, np.ndarray]:
+def main_dtod(path_pre: str, path_post: str, n: int = 1, k: float = 1.0, closing: bool = False, p: int = 30, d: float = 0.5, a: int = 3000, out_path: str | None = None) -> tuple[dict, np.ndarray]:
     """
     ...
     If out_path is not None, writes the raster at the given path out_path
@@ -495,26 +495,26 @@ def main_dtod(path_img1: str, path_img2: str, n: int, k: float = 1.0, closing: b
 
     # ==== bands loading ====
 
-    with rasterio.open(path_img1) as src1:
-        img1 = src1.read()
+    with rasterio.open(path_pre) as src1:
+        pre = src1.read()
         profile1 = src1.profile
 
-    with rasterio.open(path_img2) as src2:
-        img2 = src2.read()
+    with rasterio.open(path_post) as src2:
+        post = src2.read()
         profile2 = src2.profile
 
     # ==== NaN handling, padding, clipping and normalization ====
 
-    img1 = to_nan(img1)
-    img2 = to_nan(img2)
-    img1, img2 = align_by_padding(img1, profile1, img2, profile2)
+    pre = to_nan(pre)
+    post = to_nan(post)
+    pre, post = align_by_padding(pre, profile1, post, profile2)
 
-    img1 = normalize_image(clip_percentiles(img1))
-    img2 = normalize_image(clip_percentiles(img2))
+    pre = normalize_image(clip_percentiles(pre))
+    post = normalize_image(clip_percentiles(post))
 
     # ==== dissimilarity computation ====
 
-    dist = dissimilarity(img1, img2)
+    dist = dissimilarity(pre, post)
 
     # ==== tiling, thresholding and reassembly ====
 
@@ -545,3 +545,45 @@ def main_dtod(path_img1: str, path_img2: str, n: int, k: float = 1.0, closing: b
             dst.write(filt.astype("uint8") * 255, 1)  # ensure we don't write a tif with boolean values directly
 
     return profile, filt
+
+
+########## CLI ##########
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Detect changes between two coregistered rasters and write a binary mask.\n\n"
+            "Output: GeoTIFF with pixel values 255 (change) or 0 (no change).\n\n"
+            "Required : --pre, --post, --output\n"
+            "Optional : --n, --k, --p, --d, --a, --closing"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--pre",    required=True, metavar="PATH", help="[required] Path to the pre-event raster")
+    parser.add_argument("--post",   required=True, metavar="PATH", help="[required] Path to the post-event raster")
+    parser.add_argument("--output", required=True, metavar="PATH", help="[required] Output GeoTIFF path")
+    parser.add_argument("--n",  type=int,   default=1,     help="[optional] Number of tiles per axis for tiled Otsu (default: 1 = global Otsu)")
+    parser.add_argument("--k",  type=float, default=1.0,   help="[optional] Otsu threshold scaling factor (default: 1.0)")
+    parser.add_argument("--p",  type=int,   default=30,    help="[optional] Local density window size in pixels (default: 30)")
+    parser.add_argument("--d",  type=float, default=0.5,   help="[optional] Minimum local density to keep a pixel (default: 0.5)")
+    parser.add_argument("--a",  type=int,   default=3000,  help="[optional] Minimum area of connected components in pixels (default: 3000)")
+    parser.add_argument("--closing", action="store_true",  help="[optional] Restrict dense regions to originally white pixels (default: False)")
+
+    args = parser.parse_args()
+    main_dtod(
+        path_pre=args.pre,
+        path_post=args.post,
+        out_path=args.output,
+        n=args.n,
+        k=args.k,
+        closing=args.closing,
+        p=args.p,
+        d=args.d,
+        a=args.a,
+    )
+
+
+if __name__ == "__main__":
+    main()

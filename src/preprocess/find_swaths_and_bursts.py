@@ -162,13 +162,13 @@ def main():
         "--image",
         required=True,
         metavar="PATH",
-        help="Path to the Sentinel-1 SLC product (.zip archive or .SAFE directory)",
+        help="[required] Path to the Sentinel-1 SLC product (.zip archive or .SAFE directory)",
     )
     parser.add_argument(
         "--aoi",
         required=True,
         metavar="WKT",
-        help='Area of interest as a WKT polygon in WGS84 (must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))")',
+        help='[required] Area of interest as a WKT polygon in WGS84 (must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))")',
     )
     args = parser.parse_args()
 

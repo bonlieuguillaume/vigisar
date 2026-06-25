@@ -142,19 +142,19 @@ def main():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--pre1",   required=True, metavar="PATH")
-    parser.add_argument("--pre2",   required=True, metavar="PATH")
-    parser.add_argument("--post1",  required=True, metavar="PATH")
-    parser.add_argument("--post2",  required=True, metavar="PATH")
+    parser.add_argument("--pre1",   required=True, metavar="PATH", help="[required] Earliest SLC product (.zip or .SAFE)")
+    parser.add_argument("--pre2",   required=True, metavar="PATH", help="[required] Second SLC product (.zip or .SAFE)")
+    parser.add_argument("--post1",  required=True, metavar="PATH", help="[required] Third SLC product (.zip or .SAFE)")
+    parser.add_argument("--post2",  required=True, metavar="PATH", help="[required] Latest SLC product (.zip or .SAFE)")
     parser.add_argument("--aoi",    required=True, metavar="WKT",
                         help=(
-                            "Area of interest as a WKT polygon in WGS84.  "
+                            "[required] Area of interest as a WKT polygon in WGS84.  "
                             'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                         ))
     parser.add_argument("--output", required=True, metavar="NAME",
-                        help="Run label — creates data/preprocessed/<NAME>/")
+                        help="[required] Run label — creates data/preprocessed/<NAME>/")
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
-                        help=f"Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
+                        help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
 
     args = parser.parse_args()
     result = main_preprocess(
