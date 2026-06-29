@@ -10,7 +10,7 @@
       <file>${input1}</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,73468,13572</pixelRegion>
+      <pixelRegion/>
       <maskNames/>
     </parameters>
   </node>
@@ -48,7 +48,7 @@
       <file>${input2}</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,74343,13581</pixelRegion>
+      <pixelRegion/>
       <maskNames/>
     </parameters>
   </node>

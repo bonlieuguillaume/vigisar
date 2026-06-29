@@ -142,12 +142,12 @@ def _resolve_gathering_bands(
     return bands_pre, bands_post
 
 
-def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> Optional[str]:
+def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> bool:
     """
     Internal helper: build a GPT command from a parameter dict and execute it.
 
     Parameters are passed as ``-Pkey=value`` flags, substituting ``${key}``
-    placeholders in the XML graph.  Returns stdout on success, None on failure.
+    placeholders in the XML graph.  Returns True on success, False on failure.
 
     Raises:
         FileNotFoundError: If gpt_path does not exist on the filesystem.
@@ -170,12 +170,11 @@ def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> Optional[str]:
 
     print(f"Running graph: {os.path.basename(graph_xml)}")
     try:
-        process = subprocess.run(command, check=True, text=True)
+        subprocess.run(command, check=True, text=True)
         print("Processing completed successfully.")
-        return process.stdout
-    except subprocess.CalledProcessError as e:
-        print(f"Error during graph execution:\n{e.stderr}", file=sys.stderr)
-        return None
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -470,14 +469,24 @@ def _split_grd_stack(dim_path: str, pre_path: str, post_path: str) -> list[str]:
     mst_names = [_clean_band_name(band_names[i - 1]) for i in mst_idx]
     slv_names = [_clean_band_name(band_names[i - 1]) for i in slv_idx]
 
+    data_dir = dim_path.replace(".dim", ".data")
     produced = []
     for path, indices, names in [
         (pre_path,  mst_idx, mst_names),
         (post_path, slv_idx, slv_names),
     ]:
-        gdal.PushErrorHandler("CPLQuietErrorHandler")
-        gdal.Translate(path, dim_path, bandList=indices, format="GTiff")
-        gdal.PopErrorHandler()
+        # BEAM-DIMAP stores each band as <name>.img + <name>.hdr (ENVI) inside
+        # the .data/ directory. GDAL cannot open the .dim XML directly, so we
+        # open individual .img files and merge them into one GeoTIFF via a VRT.
+        raw_names = [band_names[i - 1] for i in indices]
+        img_paths = [os.path.join(data_dir, f"{bn}.img") for bn in raw_names]
+
+        vrt = gdal.BuildVRT("", img_paths, separate=True)
+        if vrt is None:
+            continue
+        gdal.Translate(path, vrt, format="GTiff")
+        vrt = None
+
         if os.path.exists(path):
             _clean_geotiff(path, names)
             produced.append(path)
@@ -548,16 +557,23 @@ def run_backscatter_grd(
     os.makedirs(folder, exist_ok=True)
 
     tmp_dim = os.path.join(_TEMP_DIR, "backscatter_grd.dim")
+    tmp_data = os.path.join(_TEMP_DIR, "backscatter_grd.data")
     os.makedirs(_TEMP_DIR, exist_ok=True)
 
-    _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
+    # Remove any partial output from a previous failed run so SNAP starts clean.
+    for path in (tmp_dim, tmp_data):
+        if os.path.exists(path):
+            import shutil
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+
+    success = _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
         "input1": pre,
         "input2": post,
         "aoi":    aoi,
         "output": tmp_dim,
     })
 
-    if not os.path.exists(tmp_dim):
+    if not success or not os.path.exists(tmp_dim):
         return []
 
     return _split_grd_stack(tmp_dim, output_pre, output_post)
