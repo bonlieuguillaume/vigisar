@@ -561,10 +561,14 @@ def run_backscatter_grd(
     os.makedirs(_TEMP_DIR, exist_ok=True)
 
     # Remove any partial output from a previous failed run so SNAP starts clean.
+    import shutil
     for path in (tmp_dim, tmp_data):
         if os.path.exists(path):
-            import shutil
-            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+            try:
+                shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+            except PermissionError:
+                print(f"Warning: cannot delete {path} (file locked by another process). "
+                      "Close SNAP GUI if it has this file open.", file=sys.stderr)
 
     success = _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
         "input1": pre,
