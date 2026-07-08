@@ -156,7 +156,7 @@
       <sourceProduct refid="CreateStack"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <numGCPtoGenerate>2000</numGCPtoGenerate>
+      <numGCPtoGenerate>200</numGCPtoGenerate>
       <coarseRegistrationWindowWidth>128</coarseRegistrationWindowWidth>
       <coarseRegistrationWindowHeight>128</coarseRegistrationWindowHeight>
       <rowInterpFactor>4</rowInterpFactor>
