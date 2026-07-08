@@ -53,8 +53,13 @@ def main_preprocess(
         post1 (str): Third SLC product.
         post2 (str): Latest SLC product.
         aoi (str): Area of interest as a WKT polygon in WGS84.
-        output_name (str): Label for this run (e.g. ``"zta1"``).
-            A folder ``data/preprocessed/<output_name>/`` is created.
+        output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
+
+            * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
+              is created and the products are written inside it.
+            * Path (``"data/preprocessed/zta6/zta6_slc"``) — the products are
+              written inside that directory (created if needed), using the
+              last segment (``zta6_slc``) as filename prefix.
         gpt_path (str): Path to the SNAP GPT executable.
 
     Returns:
@@ -76,8 +81,13 @@ def main_preprocess(
     run_coherence(pre1, pre2,   aoi, pair="pre",  gpt_path=gpt_path)
     run_coherence(post1, post2, aoi, pair="post", gpt_path=gpt_path)
 
-    # 5. Gathering — all outputs go into the same output_name/ folder
-    out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
+    # 5. Gathering — all outputs go into the same output folder
+    if os.sep in output_name or "/" in output_name:
+        out_dir = os.path.abspath(output_name)
+        prefix  = os.path.basename(os.path.normpath(output_name))
+    else:
+        out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
+        prefix  = output_name
     os.makedirs(out_dir, exist_ok=True)
 
     pre_tifs:  list[str] = []
@@ -93,7 +103,7 @@ def main_preprocess(
 
         # Pass a full path prefix so run_gathering writes directly into out_dir
         # (single-swath: zta1/zta1, multi-swath: zta1/zta1_IW1, zta1/zta1_IW2)
-        gather_prefix = os.path.join(out_dir, f"{output_name}{suffix}")
+        gather_prefix = os.path.join(out_dir, f"{prefix}{suffix}")
         tifs = run_gathering(bs_path, coh_pre_path, coh_post_path,
                              output=gather_prefix, gpt_path=gpt_path)
 
@@ -108,8 +118,8 @@ def main_preprocess(
 
     # Multi-swath: mosaic the per-swath tiles (all already in out_dir)
 
-    final_pre  = os.path.join(out_dir, f"{output_name}_pre.tif")
-    final_post = os.path.join(out_dir, f"{output_name}_post.tif")
+    final_pre  = os.path.join(out_dir, f"{prefix}_pre.tif")
+    final_post = os.path.join(out_dir, f"{prefix}_post.tif")
 
     run_mosaic(pre_tifs,  final_pre)
     run_mosaic(post_tifs, final_post)
@@ -138,7 +148,12 @@ def main():
             "                           coh_VH (pre1×pre2), coh_VV (pre1×pre2)\n"
             "  <NAME>_post.tif — post-event product\n"
             "                    bands: Gamma0_VH (post1), Gamma0_VV (post1),\n"
-            "                           coh_VH (post1×post2), coh_VV (post1×post2)\n"
+            "                           coh_VH (post1×post2), coh_VV (post1×post2)\n\n"
+            "If --output is a path instead of a simple name, the products are\n"
+            "written inside that directory (created if needed) and its last\n"
+            "segment is used as filename prefix, e.g.:\n"
+            "  --output data/preprocessed/zta6/zta6_slc\n"
+            "  → data/preprocessed/zta6/zta6_slc/zta6_slc_pre.tif and zta6_slc_post.tif\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -151,8 +166,15 @@ def main():
                             "[required] Area of interest as a WKT polygon in WGS84.  "
                             'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                         ))
-    parser.add_argument("--output", required=True, metavar="NAME",
-                        help="[required] Run label — creates data/preprocessed/<NAME>/")
+    parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
+                        help=(
+                            "[required] Run label or output path.  "
+                            "Simple name: creates data/preprocessed/<NAME>/ and writes "
+                            "<NAME>_pre.tif and <NAME>_post.tif inside it.  "
+                            "Path (e.g. data/preprocessed/zta6/zta6_slc): creates that "
+                            "directory if needed and writes zta6_slc_pre.tif and "
+                            "zta6_slc_post.tif inside it."
+                        ))
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
                         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
 

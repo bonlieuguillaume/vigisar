@@ -39,8 +39,13 @@ def main_preprocess_grd(
         pre (str): Path to the pre-event Sentinel-1 GRD product (.zip or .SAFE).
         post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
         aoi (str): Area of interest as a WKT polygon in WGS84.
-        output_name (str): Label for this run (e.g. ``"zta1"``).
-            A folder ``data/preprocessed/<output_name>/`` is created.
+        output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
+
+            * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
+              is created and the products are written inside it.
+            * Path (``"data/preprocessed/zta6/zta6_grd"``) — the products are
+              written inside that directory (created if needed), using the
+              last segment (``zta6_grd``) as filename prefix.
         gpt_path (str): Path to the SNAP GPT executable.
 
     Returns:
@@ -53,10 +58,15 @@ def main_preprocess_grd(
     Raises:
         RuntimeError: If the GPT graph fails to produce output files.
     """
-    out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
+    if os.sep in output_name or "/" in output_name:
+        out_dir = os.path.abspath(output_name)
+        prefix  = os.path.basename(os.path.normpath(output_name))
+    else:
+        out_dir = os.path.join(_PREPROCESSED_DIR, output_name)
+        prefix  = output_name
     os.makedirs(out_dir, exist_ok=True)
 
-    gather_prefix = os.path.join(out_dir, output_name)
+    gather_prefix = os.path.join(out_dir, prefix)
     tifs = run_backscatter_grd(pre, post, aoi, output=gather_prefix, gpt_path=gpt_path)
 
     if len(tifs) < 2:
@@ -87,7 +97,12 @@ def main():
             "  <NAME>_pre.tif  — pre-event product\n"
             "                    bands: Gamma0_VH (pre), Gamma0_VV (pre)\n"
             "  <NAME>_post.tif — post-event product\n"
-            "                    bands: Gamma0_VH (post), Gamma0_VV (post)\n"
+            "                    bands: Gamma0_VH (post), Gamma0_VV (post)\n\n"
+            "If --output is a path instead of a simple name, the products are\n"
+            "written inside that directory (created if needed) and its last\n"
+            "segment is used as filename prefix, e.g.:\n"
+            "  --output data/preprocessed/zta6/zta6_grd\n"
+            "  → data/preprocessed/zta6/zta6_grd/zta6_grd_pre.tif and zta6_grd_post.tif\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -100,11 +115,14 @@ def main():
                             "[required] Area of interest as a WKT polygon in WGS84.  "
                             'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
                         ))
-    parser.add_argument("--output", required=True, metavar="NAME",
+    parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
                         help=(
-                            "[required] Run label (simple name, not a path).  "
-                            "Creates data/preprocessed/<NAME>/ and writes "
-                            "<NAME>_pre.tif and <NAME>_post.tif inside it."
+                            "[required] Run label or output path.  "
+                            "Simple name: creates data/preprocessed/<NAME>/ and writes "
+                            "<NAME>_pre.tif and <NAME>_post.tif inside it.  "
+                            "Path (e.g. data/preprocessed/zta6/zta6_grd): creates that "
+                            "directory if needed and writes zta6_grd_pre.tif and "
+                            "zta6_grd_post.tif inside it."
                         ))
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
                         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
