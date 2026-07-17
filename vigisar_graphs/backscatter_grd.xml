@@ -156,7 +156,7 @@
       <sourceProduct refid="CreateStack"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <numGCPtoGenerate>200</numGCPtoGenerate>
+      <numGCPtoGenerate>2000</numGCPtoGenerate>
       <coarseRegistrationWindowWidth>128</coarseRegistrationWindowWidth>
       <coarseRegistrationWindowHeight>128</coarseRegistrationWindowHeight>
       <rowInterpFactor>4</rowInterpFactor>
@@ -183,7 +183,7 @@
       <sourceProduct refid="Cross-Correlation"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <rmsThreshold>0.05</rmsThreshold>
+      <rmsThreshold>0.5</rmsThreshold>
       <warpPolynomialOrder>1</warpPolynomialOrder>
       <interpolationMethod>Cubic convolution (6 points)</interpolationMethod>
       <demRefinement/>
