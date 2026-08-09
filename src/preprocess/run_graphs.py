@@ -43,12 +43,18 @@ def _clean_band_name(collocate_name: str) -> str:
 
 
 def _clean_geotiff(path: str, band_names: list[str]) -> None:
-    """Remove extra flag bands added by SNAP's Collocate (collocationFlags) and
-    rename the remaining bands.
+    """Remove extra flag bands added by SNAP's Collocate (collocationFlags),
+    rename the remaining bands, and declare 0.0 as the NoData value.
 
     SNAP's Write operator appends flag bands after data bands regardless of the
     BandSelect node.  We keep only the first len(band_names) bands and discard
     the rest, then set the band descriptions in-place.
+
+    SNAP fills masked pixels (sea via nodataValueAtSea, out-of-swath areas)
+    with the band no-data value 0.0, but that declaration is lost when the
+    BEAM-DIMAP bands are converted to GeoTIFF, so it is re-set here on every
+    band (a linear Gamma0 or coherence of exactly 0.0 does not occur in
+    practice, so this is safe).
     """
     try:
         from osgeo import gdal
@@ -81,7 +87,9 @@ def _clean_geotiff(path: str, band_names: list[str]) -> None:
     if ds is None:
         return
     for i, name in enumerate(band_names, 1):
-        ds.GetRasterBand(i).SetDescription(name)
+        band = ds.GetRasterBand(i)
+        band.SetDescription(name)
+        band.SetNoDataValue(0.0)
     ds = None
 
 
@@ -620,7 +628,8 @@ def run_mosaic(inputs: list[str], output: str) -> str:
 
     gdal.UseExceptions()
     gdal.PushErrorHandler("CPLQuietErrorHandler")
-    ds = gdal.Warp(output, inputs, format="GTiff", resampleAlg="near")
+    ds = gdal.Warp(output, inputs, format="GTiff", resampleAlg="near",
+                   srcNodata=0.0, dstNodata=0.0)
     gdal.PopErrorHandler()
 
     if ds is None:
