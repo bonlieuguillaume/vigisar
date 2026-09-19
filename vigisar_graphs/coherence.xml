@@ -1,26 +1,16 @@
 <graph id="Graph">
   <version>1.0</version>
+
+  <!-- Branch 1: master product -->
   <node id="Read">
     <operator>Read</operator>
     <sources/>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <useAdvancedOptions>false</useAdvancedOptions>
-      <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\zta5\S1C_IW_SLC__1SDV_20250903T093505_20250903T093532_003958_007E18_B8C0.zip</file>
+      <file>${input1}</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,73468,13572</pixelRegion>
-      <maskNames/>
-    </parameters>
-  </node>
-  <node id="Read(2)">
-    <operator>Read</operator>
-    <sources/>
-    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <useAdvancedOptions>false</useAdvancedOptions>
-      <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\zta5\S1C_IW_SLC__1SDV_20250822T093509_20250822T093535_003783_0078DA_C314.zip</file>
-      <copyMetadata>true</copyMetadata>
-      <bandNames/>
-      <pixelRegion>0,0,74343,13581</pixelRegion>
+      <pixelRegion/>
       <maskNames/>
     </parameters>
   </node>
@@ -35,6 +25,33 @@
       <continueOnFail>false</continueOnFail>
     </parameters>
   </node>
+  <node id="TOPSAR-Split">
+    <operator>TOPSAR-Split</operator>
+    <sources>
+      <sourceProduct refid="Apply-Orbit-File"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <subswath>${subswath}</subswath>
+      <enableSingleSwathMode>false</enableSingleSwathMode>
+      <selectedPolarisations>VH,VV</selectedPolarisations>
+      <firstBurstIndex>${first_burst}</firstBurstIndex>
+      <lastBurstIndex>${last_burst}</lastBurstIndex>
+    </parameters>
+  </node>
+
+  <!-- Branch 2: secondary product -->
+  <node id="Read(2)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>${input2}</file>
+      <copyMetadata>true</copyMetadata>
+      <bandNames/>
+      <pixelRegion/>
+      <maskNames/>
+    </parameters>
+  </node>
   <node id="Apply-Orbit-File(2)">
     <operator>Apply-Orbit-File</operator>
     <sources>
@@ -46,34 +63,26 @@
       <continueOnFail>false</continueOnFail>
     </parameters>
   </node>
-  <node id="TOPSAR-Split">
-    <operator>TOPSAR-Split</operator>
-    <sources>
-      <sourceProduct refid="Apply-Orbit-File"/>
-    </sources>
-    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <subswath>IW1</subswath>
-      <enableSingleSwathMode>false</enableSingleSwathMode>
-      <selectedPolarisations>VH,VV</selectedPolarisations>
-      <firstBurstIndex>4</firstBurstIndex>
-      <lastBurstIndex>5</lastBurstIndex>
-      <wktAoi/>
-    </parameters>
-  </node>
   <node id="TOPSAR-Split(2)">
     <operator>TOPSAR-Split</operator>
     <sources>
       <sourceProduct refid="Apply-Orbit-File(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <subswath>IW1</subswath>
+      <subswath>${subswath}</subswath>
       <enableSingleSwathMode>false</enableSingleSwathMode>
       <selectedPolarisations>VH,VV</selectedPolarisations>
-      <firstBurstIndex>4</firstBurstIndex>
-      <lastBurstIndex>5</lastBurstIndex>
-      <wktAoi/>
+      <firstBurstIndex>${first_burst}</firstBurstIndex>
+      <lastBurstIndex>${last_burst}</lastBurstIndex>
     </parameters>
   </node>
+
+  <!-- Merged pipeline -->
+  <!-- MASTER = first source (${input1} branch): Back-Geocoding coregisters the
+       second source onto the first one. For coherence the master/slave order
+       does not matter downstream (one coh_<pol> band per polarisation, no
+       positional split); the pre/post distinction is carried by which product
+       is passed as input2 vs input3 of gathering.xml. -->
   <node id="Back-Geocoding">
     <operator>Back-Geocoding</operator>
     <sources>
@@ -164,24 +173,7 @@
       <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
       <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
       <pixelSpacingInDegree>8.983152841195215E-5</pixelSpacingInDegree>
-      <mapProjection>PROJCS[&quot;UTM Zone 20, South / World Geodetic System 1984&quot;, &#xd;
-  GEOGCS[&quot;World Geodetic System 1984&quot;, &#xd;
-    DATUM[&quot;World Geodetic System 1984&quot;, &#xd;
-      SPHEROID[&quot;WGS 84&quot;, 6378137.0, 298.257223563, AUTHORITY[&quot;EPSG&quot;,&quot;7030&quot;]], &#xd;
-      AUTHORITY[&quot;EPSG&quot;,&quot;6326&quot;]], &#xd;
-    PRIMEM[&quot;Greenwich&quot;, 0.0, AUTHORITY[&quot;EPSG&quot;,&quot;8901&quot;]], &#xd;
-    UNIT[&quot;degree&quot;, 0.017453292519943295], &#xd;
-    AXIS[&quot;Geodetic longitude&quot;, EAST], &#xd;
-    AXIS[&quot;Geodetic latitude&quot;, NORTH]], &#xd;
-  PROJECTION[&quot;Transverse_Mercator&quot;], &#xd;
-  PARAMETER[&quot;central_meridian&quot;, -63.0], &#xd;
-  PARAMETER[&quot;latitude_of_origin&quot;, 0.0], &#xd;
-  PARAMETER[&quot;scale_factor&quot;, 0.9996], &#xd;
-  PARAMETER[&quot;false_easting&quot;, 500000.0], &#xd;
-  PARAMETER[&quot;false_northing&quot;, 10000000.0], &#xd;
-  UNIT[&quot;m&quot;, 1.0], &#xd;
-  AXIS[&quot;Easting&quot;, EAST], &#xd;
-  AXIS[&quot;Northing&quot;, NORTH]]</mapProjection>
+      <mapProjection>AUTO:42001</mapProjection>
       <alignToStandardGrid>false</alignToStandardGrid>
       <standardGridOriginX>0.0</standardGridOriginX>
       <standardGridOriginY>0.0</standardGridOriginY>
@@ -214,7 +206,7 @@
       <tiePointGrids/>
       <region>0,0,0,0</region>
       <referenceBand/>
-      <geoRegion>POLYGON ((-61.22182846069336 -20.715255737304688, -61.1469841003418 -20.715255737304688, -61.1469841003418 -20.76943588256836, -61.22182846069336 -20.76943588256836, -61.22182846069336 -20.715255737304688, -61.22182846069336 -20.715255737304688))</geoRegion>
+      <geoRegion>${aoi}</geoRegion>
       <subSamplingX>1</subSamplingX>
       <subSamplingY>1</subSamplingY>
       <fullSwath>false</fullSwath>
@@ -229,10 +221,11 @@
       <sourceProduct refid="Subset"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <file>C:\Users\gbonlieu\Documents\vigisar\data\preprocessed\zta5\zta5_explore\Subset_S1C_IW_SLC__1SDV_20250903T093505_20250903T093532_003958_007E18_B8C0_Orb_Stack_Coh_Deb_TC.dim</file>
+      <file>${output}</file>
       <formatName>BEAM-DIMAP</formatName>
     </parameters>
   </node>
+
   <applicationData id="Presentation">
     <Description/>
     <node id="Read">

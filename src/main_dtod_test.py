@@ -43,7 +43,7 @@ from skimage.morphology import (closing,
 
 ########## NODATA HANDLING ##########
 
-def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, -3.4028235e38)) -> np.ndarray:
+def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, -3.4028235e38), profile: dict | None = None) -> np.ndarray:
     """
     Replace NoData values by NaN.
 
@@ -53,12 +53,20 @@ def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, -3.4028235e38)) -> np.
         Input array (any dtype).
     nodata_values : tuple of numbers, optional
         Values to treat as NoData and convert to NaN.
+    profile : dict, optional
+        Rasterio profile of the raster `arr` was read from.  If it declares a
+        NoData value (profile["nodata"]), that value is converted too.  This is
+        how the 0.0 written by the preprocessing on sea/out-of-swath pixels is
+        caught without blindly treating every 0 as NoData.
 
     Returns
     -------
     np.ndarray
         Float32 array with the same shape as `arr`, where all nodata_values have been replaced by NaN.
     """
+    if profile is not None and profile.get("nodata") is not None:
+        nodata_values = (*nodata_values, profile["nodata"])
+
     out = arr.astype("float32", copy=True) # we cast to float32 so that NaN is representable
 
     for nd in nodata_values:
@@ -536,8 +544,8 @@ def main_dtod_test(path_img1: str, path_img2: str, n: int, k: float = 1.0, closi
 
     # ==== NaN handling, padding, clipping and normalization ====
 
-    img1 = to_nan(img1)
-    img2 = to_nan(img2)
+    img1 = to_nan(img1, profile=profile1)
+    img2 = to_nan(img2, profile=profile2)
     img1, img2 = align_by_padding(img1, profile1, img2, profile2)
 
     img1 = normalize_image(clip_percentiles(img1))

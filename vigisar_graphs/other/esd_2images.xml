@@ -8,7 +8,7 @@
       <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\t9\S1C_IW_SLC__1SDV_20251021T093501_20251021T093527_004658_00935C_19A2.zip</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,73012,13563</pixelRegion>
+      <pixelRegion/>
       <maskNames/>
     </parameters>
   </node>
@@ -20,7 +20,7 @@
       <file>E:\Guillaume_BONLIEU\cas_etude\forest\deforestation\t9\S1C_IW_SLC__1SDV_20250822T093509_20250822T093535_003783_0078DA_C314.zip</file>
       <copyMetadata>true</copyMetadata>
       <bandNames/>
-      <pixelRegion>0,0,74343,13581</pixelRegion>
+      <pixelRegion/>
       <maskNames/>
     </parameters>
   </node>
