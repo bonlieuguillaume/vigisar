@@ -6,9 +6,9 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 
 try:
-    from .find_swaths_and_bursts import find_subswath
+    from .polygon_to_swaths_bursts import get_intersecting_bursts, parse_polygon
 except ImportError:
-    from find_swaths_and_bursts import find_subswath  # type: ignore[no-redef]
+    from polygon_to_swaths_bursts import get_intersecting_bursts, parse_polygon  # type: ignore[no-redef]
 
 DEFAULT_GPT = r"C:\Program Files\esa-snap\bin\gpt.exe"
 
@@ -97,6 +97,61 @@ def _add_swath_suffix(path: str, swath: str) -> str:
     """Insert _IW1 / _IW2 / _IW3 before the file extension."""
     base, ext = os.path.splitext(path)
     return f"{base}_{swath}{ext}"
+
+
+def _aoi_to_wkt(aoi: str) -> str:
+    """Normalise the AOI to an inline WKT string, the only form GPT accepts.
+
+    ``aoi`` may be an inline WKT string or a path to a WKT / GeoJSON file
+    (see ``polygon_to_swaths_bursts.parse_polygon``); the graphs' Subset node
+    reads ``${aoi}`` as WKT, so a file is parsed and re-serialised here.
+    """
+    return parse_polygon(aoi).wkt
+
+
+def polygon_to_swaths_bursts(product_path: str, aoi: str, coarse: bool = True) -> list[dict]:
+    """
+    Find which Sentinel-1 IW subswath(es) and burst range intersect the AOI.
+
+    Thin wrapper around ``polygon_to_swaths_bursts.get_intersecting_bursts``
+    (the module of the same name) that reshapes its ``{swath: [burst numbers]}``
+    summary into the triplets TOPSAR-Split expects (``subswath``,
+    ``first_burst``, ``last_burst``).  See ``readme_polygon_to_swaths_bursts.md``
+    for how the footprints are rebuilt from the annotation XML.
+
+    Why ``coarse`` defaults to True here (the module itself defaults to False):
+    the footprints are rebuilt from the geolocation grid, whose rows sit on the
+    burst boundaries, so consecutive bursts *touch* without overlapping and
+    the outline is only accurate to ~1 km near the edges — whereas the real
+    valid data of neighbouring bursts overlap by about a kilometre.  An AOI
+    whose edge falls in that band can therefore need a burst the strict test
+    misses.  In this pipeline the cost of the two errors is very asymmetric:
+    the AOI is also the Subset clip applied after terrain correction, so a
+    missing burst does not raise anything — it leaves a nodata hole inside the
+    final GeoTIFF, which surfaces much later as spurious "changes" in the
+    detection.  An extra burst only costs a few seconds of processing and is
+    stitched cleanly by TOPSAR-Deburst.  Dilating the footprints by ~2 km
+    before the test (``coarse=True``) buys the recall at that price.
+
+    Args:
+        product_path (str): Sentinel-1 SLC product (.zip archive or .SAFE directory).
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
+        coarse (bool): Dilate the footprints before the test (default True,
+            see above).  Set False to reproduce the module's strict result.
+
+    Returns:
+        List of dicts, one per intersecting subswath, sorted by subswath, e.g.::
+
+            [{"subswath": "IW2", "first_burst": 3, "last_burst": 5}]
+
+        Empty if no subswath intersects the AOI.
+    """
+    _, summary = get_intersecting_bursts(product_path, aoi, coarse=coarse)
+    return [
+        {"subswath": swath, "first_burst": min(bursts), "last_burst": max(bursts)}
+        for swath, bursts in sorted(summary.items())
+    ]
 
 
 def _read_dimap_band_names(dim_path: str) -> list[str]:
@@ -222,9 +277,9 @@ def run_backscatter(
         → Speckle-Filter → Terrain-Correction → Subset → Write
 
     The subswath and burst range are determined automatically from ``aoi`` using
-    ``find_subswath``.  If the AOI spans multiple subswaths the graph is run
-    once per subswath and the outputs are suffixed with the subswath name
-    (e.g. ``backscatter_IW2.dim``).
+    ``polygon_to_swaths_bursts`` (coarse mode, see its docstring).  If the AOI
+    spans multiple subswaths the graph is run once per subswath and the outputs
+    are suffixed with the subswath name (e.g. ``backscatter_IW2.dim``).
 
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
@@ -232,9 +287,10 @@ def run_backscatter(
             output stack (required by ``run_gathering``).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
             Should be the post1 image.
-        aoi (str): Area of interest as a WKT polygon in WGS84.  Used both to
-            locate the correct subswath/burst range and to spatially clip the
-            Terrain-Correction output via the Subset node.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.  Used both to locate the correct subswath/burst
+            range and to spatially clip the Terrain-Correction output via the
+            Subset node.
         output (str, optional): Full path for the output product (.dim).
             Defaults to ``data/preprocessed/temp/backscatter.dim``.
             If multiple subswaths are found, the subswath name is inserted before
@@ -248,9 +304,10 @@ def run_backscatter(
         FileNotFoundError: If gpt_path does not exist.
         ValueError: If the AOI does not intersect any subswath in input1.
     """
-    swaths = find_subswath(input1, aoi)
+    swaths = polygon_to_swaths_bursts(input1, aoi)
     if not swaths:
         raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+    aoi_wkt = _aoi_to_wkt(aoi)
 
     base_path = output if output is not None else os.path.join(_TEMP_DIR, "backscatter.dim")
     os.makedirs(os.path.dirname(os.path.abspath(base_path)), exist_ok=True)
@@ -262,7 +319,7 @@ def run_backscatter(
             "input1":      input1,
             "input2":      input2,
             "output":      out,
-            "aoi":         aoi,
+            "aoi":         aoi_wkt,
             "subswath":    swath["subswath"],
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
@@ -307,7 +364,8 @@ def run_coherence(
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.
         pair (str, optional): ``"pre"`` or ``"post"``.  When given, the output is
             placed in the temp folder with a ``_pre`` / ``_post`` suffix so that
             ``run_gathering`` can find it.  When omitted, the output goes to
@@ -332,9 +390,10 @@ def run_coherence(
     if pair is not None and pair not in ("pre", "post"):
         raise ValueError(f"pair must be 'pre', 'post', or None, got {pair!r}")
 
-    swaths = find_subswath(input1, aoi)
+    swaths = polygon_to_swaths_bursts(input1, aoi)
     if not swaths:
         raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+    aoi_wkt = _aoi_to_wkt(aoi)
 
     if pair is None:
         if output is None:
@@ -357,7 +416,7 @@ def run_coherence(
             "input1":      input1,
             "input2":      input2,
             "output":      out,
-            "aoi":         aoi,
+            "aoi":         aoi_wkt,
             "subswath":    swath["subswath"],
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
@@ -547,8 +606,9 @@ def run_backscatter_grd(
             Used as the master image (reference for coregistration).
         post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
             Used as the slave image.
-        aoi (str): Area of interest as a WKT polygon in WGS84.  Used to clip
-            the output after terrain correction.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.  Used to clip the output after terrain
+            correction.
         output (str, optional): Controls where the two output GeoTIFFs are written.
             Follows the same convention as ``run_gathering``:
 
@@ -598,7 +658,7 @@ def run_backscatter_grd(
     success = _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
         "input1": pre,
         "input2": post,
-        "aoi":    aoi,
+        "aoi":    _aoi_to_wkt(aoi),
         "output": tmp_dim,
     })
 
@@ -704,11 +764,12 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="[required] Master SLC product — should be pre2 (.zip or .SAFE)")
     p_bs.add_argument("--input2", required=True, metavar="PATH",
                       help="[required] Secondary SLC product — should be post1 (.zip or .SAFE)")
-    p_bs.add_argument("--aoi", required=True, metavar="WKT",
+    p_bs.add_argument("--aoi", required=True, metavar="WKT_OR_FILE",
                       help=(
-                          "[required] Area of interest as a WKT polygon in WGS84.  Used to locate "
-                          'the correct subswath/burst range and to clip the output.  '
-                          'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                          "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                          '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                          "WKT / GeoJSON file.  Used to locate the correct subswath/burst range "
+                          "and to clip the output."
                       ))
     p_bs.add_argument("--output", default=None, metavar="PATH",
                       help=(
@@ -740,10 +801,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="[required] Master SLC product (.zip or .SAFE)")
     p_coh.add_argument("--input2", required=True, metavar="PATH",
                        help="[required] Secondary SLC product (.zip or .SAFE)")
-    p_coh.add_argument("--aoi", required=True, metavar="WKT",
+    p_coh.add_argument("--aoi", required=True, metavar="WKT_OR_FILE",
                        help=(
-                           "[required] Area of interest as a WKT polygon in WGS84.  "
-                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                           "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                           '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                           "WKT / GeoJSON file."
                        ))
     p_coh.add_argument("--pair", default=None, choices=["pre", "post"],
                        help=(
@@ -811,10 +873,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="[required] Pre-event GRD product (.zip or .SAFE) — used as master")
     p_grd.add_argument("--post",   required=True, metavar="PATH",
                        help="[required] Post-event GRD product (.zip or .SAFE) — used as slave")
-    p_grd.add_argument("--aoi",    required=True, metavar="WKT",
+    p_grd.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                        help=(
-                           "[required] Area of interest as a WKT polygon in WGS84.  "
-                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                           "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                           '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                           "WKT / GeoJSON file."
                        ))
     p_grd.add_argument("--output", default=None, metavar="NAME",
                        help=(

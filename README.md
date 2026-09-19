@@ -39,8 +39,9 @@ This module allows you to validate your results against reference data so as to 
 
 ### 3. SAR Preprocessing (`src/preprocess/`)
 Turns raw Sentinel-1 products into the pre/post GeoTIFFs consumed by the detection pipeline, by running SNAP GPT graphs stored in `vigisar_graphs/`:
-- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`.
+- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`. The sub-swaths and burst range to process are found automatically from the AOI by `polygon_to_swaths_bursts.py` (footprints rebuilt from the annotation XML, no image data read — see `src/preprocess/readme_polygon_to_swaths_bursts.md`).
 - **GRD workflow** (`main_preprocess_grd.py`): backscatter only (`gamma0_VH`, `gamma0_VV`).
+- The `--aoi` of every entry point takes either an inline WKT polygon or a path to a WKT / GeoJSON file, in lon/lat WGS84.
 
 > **Band naming & master/slave conventions.** SNAP band names (dates, `_mst`/`_slv`, subswath) are unreliable, so the pipeline never parses them: it relies on the **order of the sources** in the graphs (first source = master, bands written first) and on Collocate suffixes (`_M`, `_S0`, `_S1`) that are *predicted* by the Python code. These couplings and the resulting conventions are documented **directly inside the graph files** — see the header comment of `vigisar_graphs/gathering.xml` and the comments on the `CreateStack` / `Back-Geocoding` nodes in `backscatter.xml`, `backscatter_grd.xml` and `coherence.xml`, as well as the docstring of `_resolve_gathering_bands` in `src/preprocess/run_graphs.py`. Read them before editing a graph or re-saving it from SNAP's Graph Builder.
 

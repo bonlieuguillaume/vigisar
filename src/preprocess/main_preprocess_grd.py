@@ -38,7 +38,8 @@ def main_preprocess_grd(
     Args:
         pre (str): Path to the pre-event Sentinel-1 GRD product (.zip or .SAFE).
         post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
         output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
 
             * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
@@ -110,10 +111,11 @@ def main():
                         help="[required] Pre-event GRD product (.zip or .SAFE)")
     parser.add_argument("--post",   required=True, metavar="PATH",
                         help="[required] Post-event GRD product (.zip or .SAFE)")
-    parser.add_argument("--aoi",    required=True, metavar="WKT",
+    parser.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                         help=(
-                            "[required] Area of interest as a WKT polygon in WGS84.  "
-                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                            "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                            '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                            "WKT / GeoJSON file.  Used to clip the outputs."
                         ))
     parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
                         help=(

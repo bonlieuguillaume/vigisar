@@ -4,15 +4,13 @@ import os
 try:
     from .run_graphs import (
         run_backscatter, run_coherence, run_gathering, run_mosaic,
-        DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
+        polygon_to_swaths_bursts, DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
     )
-    from .find_swaths_and_bursts import find_subswath
 except ImportError:
     from run_graphs import (  # type: ignore[no-redef]
         run_backscatter, run_coherence, run_gathering, run_mosaic,
-        DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
+        polygon_to_swaths_bursts, DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
     )
-    from find_swaths_and_bursts import find_subswath  # type: ignore[no-redef]
 
 
 def main_preprocess(
@@ -52,7 +50,8 @@ def main_preprocess(
         pre2 (str): Second SLC product.
         post1 (str): Third SLC product.
         post2 (str): Latest SLC product.
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
         output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
 
             * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
@@ -69,8 +68,11 @@ def main_preprocess(
     Raises:
         ValueError: If no subswath intersects the AOI.
     """
-    # 1. Detect subswaths once (pre2 as reference product)
-    swaths = find_subswath(pre2, aoi)
+    # 1. Detect subswaths once (pre2 as reference product). Coarse mode: an
+    # AOI on a burst seam also gets the neighbouring burst — a missing burst
+    # would leave a silent nodata hole in the final GeoTIFFs, an extra one
+    # costs seconds (see polygon_to_swaths_bursts in run_graphs).
+    swaths = polygon_to_swaths_bursts(pre2, aoi)
     if not swaths:
         raise ValueError(f"No subswath intersects the given AOI in {pre2!r}")
 
@@ -161,10 +163,12 @@ def main():
     parser.add_argument("--pre2",   required=True, metavar="PATH", help="[required] Second SLC product (.zip or .SAFE)")
     parser.add_argument("--post1",  required=True, metavar="PATH", help="[required] Third SLC product (.zip or .SAFE)")
     parser.add_argument("--post2",  required=True, metavar="PATH", help="[required] Latest SLC product (.zip or .SAFE)")
-    parser.add_argument("--aoi",    required=True, metavar="WKT",
+    parser.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                         help=(
-                            "[required] Area of interest as a WKT polygon in WGS84.  "
-                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                            "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                            '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                            "WKT / GeoJSON file.  Used to locate the subswath/burst range and "
+                            "to clip the outputs."
                         ))
     parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
                         help=(
