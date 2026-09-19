@@ -78,6 +78,11 @@
   </node>
 
   <!-- Merged pipeline -->
+  <!-- MASTER = first source (${input1} branch): Back-Geocoding coregisters the
+       second source onto the first one. For coherence the master/slave order
+       does not matter downstream (one coh_<pol> band per polarisation, no
+       positional split); the pre/post distinction is carried by which product
+       is passed as input2 vs input3 of gathering.xml. -->
   <node id="Back-Geocoding">
     <operator>Back-Geocoding</operator>
     <sources>

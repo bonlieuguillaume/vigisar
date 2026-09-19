@@ -52,8 +52,8 @@ def main_preprocess_grd(
         dict: ``{"pre": <path>, "post": <path>}`` — absolute paths of the
         two final GeoTIFFs.
 
-            - ``<output_name>_pre.tif``:  Gamma0_VH and Gamma0_VV from the pre image
-            - ``<output_name>_post.tif``: Gamma0_VH and Gamma0_VV from the post image
+            - ``<output_name>_pre.tif``:  gamma0_VH and gamma0_VV from the pre image
+            - ``<output_name>_post.tif``: gamma0_VH and gamma0_VV from the post image
 
     Raises:
         RuntimeError: If the GPT graph fails to produce output files.
@@ -95,9 +95,9 @@ def main():
             "  post — post-event acquisition (slave)\n\n"
             "Outputs (written to data/preprocessed/<NAME>/):\n"
             "  <NAME>_pre.tif  — pre-event product\n"
-            "                    bands: Gamma0_VH (pre), Gamma0_VV (pre)\n"
+            "                    bands: gamma0_VH (pre), gamma0_VV (pre)\n"
             "  <NAME>_post.tif — post-event product\n"
-            "                    bands: Gamma0_VH (post), Gamma0_VV (post)\n\n"
+            "                    bands: gamma0_VH (post), gamma0_VV (post)\n\n"
             "If --output is a path instead of a simple name, the products are\n"
             "written inside that directory (created if needed) and its last\n"
             "segment is used as filename prefix, e.g.:\n"

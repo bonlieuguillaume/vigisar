@@ -136,6 +136,13 @@
   </node>
 
   <!-- Merged pipeline -->
+  <!-- MASTER = first source (${input1} branch). CreateStack has no explicit
+       master parameter: the first <sourceProduct> is the master and its bands
+       are written FIRST in the output stack, slave bands second.
+       _split_grd_stack relies on that order (fallback when _mst/_slv suffixes
+       are missing) to split pre (master) from post (slave).
+       run_backscatter_grd is always called with input1 = pre, input2 = post.
+       Keep Calibration (input1) first. -->
   <node id="CreateStack">
     <operator>CreateStack</operator>
     <sources>

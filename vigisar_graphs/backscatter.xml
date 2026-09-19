@@ -158,6 +158,12 @@
   </node>
 
   <!-- Merged pipeline -->
+  <!-- MASTER = first source (${input1} branch). CreateStack has no explicit
+       master parameter: the first <sourceProduct> is the master and its bands
+       are written FIRST in the output stack, slave bands second.
+       run_gathering / _resolve_gathering_bands rely on that order to split
+       pre (master = pre2) from post (slave = post1) by position, without
+       parsing the _mst/_slv suffixes. Keep TOPSAR-Deburst (input1) first. -->
   <node id="CreateStack">
     <operator>CreateStack</operator>
     <sources>

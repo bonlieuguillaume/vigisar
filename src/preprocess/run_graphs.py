@@ -113,7 +113,14 @@ def _resolve_gathering_bands(
     Derive which Collocate output bands belong to the pre-event and post-event
     products by reading band names from the three BEAM-DIMAP inputs.
 
-    Collocate suffix convention (must match the gathering.xml sources order):
+    Band names produced by SNAP (dates, ``_mst``/``_slv``, subswath) are not
+    reliable, so nothing is parsed from them.  Instead the names Collocate will
+    produce are *predicted* from the input band names + a fixed suffix, and
+    the pre/post split is done purely by band position.
+
+    Collocate suffix convention (must match the gathering.xml sources order
+    AND ``referenceProductName`` = backscatter, see the header comment in
+    ``vigisar_graphs/gathering.xml``):
         input_backscatter → reference → ``_M``
         input_coh_pre     → first secondary → ``_S0``
         input_coh_post    → second secondary → ``_S1``
@@ -122,6 +129,16 @@ def _resolve_gathering_bands(
     Since run_backscatter is called with input1=pre2 (master) and input2=post1
     (slave), the first half of backscatter bands is always pre2 and the second
     half is always post1 — no date parsing required.
+
+    Hidden assumptions (breaking any of them will NOT raise an error, the
+    products will just be silently mislabelled):
+        * The three ``<sourceProduct>`` of the Collocate node in gathering.xml
+          keep the order backscatter / coh_pre / coh_post.  Swapping the two
+          coherence inputs swaps pre and post coherence (same band count).
+        * ``run_backscatter`` keeps input1=pre2, input2=post1, and the first
+          ``<sourceProduct>`` of CreateStack in backscatter.xml is input1.
+        * The backscatter stack contains exactly master + slave bands; the
+          even-count check below cannot detect two extra bands.
 
     Returns:
         (bands_pre, bands_post): lists of band names as they appear after
@@ -784,7 +801,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "coregistration, speckle filtering, terrain correction, and spatial clipping.\n\n"
             "Both images are processed together in a single graph run.  The output is split\n"
             "into two GeoTIFFs: <name>_pre.tif (master/pre image) and <name>_post.tif\n"
-            "(slave/post image), each with Gamma0_VH and Gamma0_VV bands.\n\n"
+            "(slave/post image), each with gamma0_VH and gamma0_VV bands.\n\n"
             "Unlike the SLC pipeline there is no subswath/burst detection step — GRD products\n"
             "already cover the full swath."
         ),

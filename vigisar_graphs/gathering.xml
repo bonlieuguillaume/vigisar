@@ -1,6 +1,38 @@
 <graph id="Graph">
   <version>1.0</version>
 
+  <!--
+    GATHERING: collocate the backscatter stack with the two coherence products
+    and split the result into a pre-event and a post-event GeoTIFF.
+
+    !! BAND NAMING CONTRACT — coupled with src/preprocess/run_graphs.py !!
+
+    The Python side (_resolve_gathering_bands) does NOT parse the band names
+    written by SNAP (dates, _mst/_slv, subswath are unreliable). Instead it
+    PREDICTS the names Collocate will produce and passes them to BandSelect
+    via ${bands_pre} / ${bands_post}. That prediction relies on two things
+    that must stay in sync with this file:
+
+      1. The ORDER of the three sources in the Collocate node below:
+           sourceProduct    = ${input1} = backscatter stack -> reference -> suffix _M
+           sourceProduct.1  = ${input2} = coherence PRE     -> secondary 0 -> suffix _S0
+           sourceProduct.2  = ${input3} = coherence POST    -> secondary 1 -> suffix _S1
+         Swapping input2/input3 would silently swap pre and post coherence:
+         both products have the same number of bands, so nothing would fail.
+
+      2. ${reference_name} must be the backscatter product (input1). If another
+         product becomes the reference, the _M/_S0/_S1 suffixes move and
+         BandSelect will not find the expected bands.
+
+    Which backscatter band is pre vs post is decided upstream by
+    backscatter.xml: CreateStack lists master bands first, and
+    run_backscatter is always called with input1 = pre2 (master),
+    input2 = post1 (slave). Do not change that order either.
+
+    Do NOT re-save this graph from SNAP Desktop's Graph Builder without
+    checking that the source order above has been preserved.
+  -->
+
   <!-- Three input reads -->
   <node id="Read">
     <operator>Read</operator>
@@ -40,6 +72,8 @@
   </node>
 
   <!-- Merge -->
+  <!-- Source order is part of the naming contract (see header):
+       Read = backscatter (_M), Read(2) = coh pre (_S0), Read(3) = coh post (_S1) -->
   <node id="Collocate">
     <operator>Collocate</operator>
     <sources>
@@ -62,8 +96,9 @@
   </node>
 
   <!-- Output branch: pre-event -->
-  <!-- Selects: pre-event coherence (backscatter _S0) + pre2 backscatter (master _mst_ _M) -->
-  <!-- Pattern works regardless of acquisition dates or subswath -->
+  <!-- ${bands_pre} = pre2 backscatter (master half of the stack, suffix _M)
+                    + pre-event coherence (suffix _S0)
+       Built by _resolve_gathering_bands from band positions, not from dates/subswath. -->
   <node id="BandSelect">
     <operator>BandSelect</operator>
     <sources>
@@ -90,8 +125,9 @@
   </node>
 
   <!-- Output branch: post-event -->
-  <!-- Selects: post-event coherence (backscatter _S1) + post1 backscatter (slave _slv_ _M) -->
-  <!-- Pattern works regardless of acquisition dates or subswath -->
+  <!-- ${bands_post} = post1 backscatter (slave half of the stack, suffix _M)
+                     + post-event coherence (suffix _S1)
+       Built by _resolve_gathering_bands from band positions, not from dates/subswath. -->
   <node id="BandSelect(2)">
     <operator>BandSelect</operator>
     <sources>
