@@ -39,7 +39,7 @@ This module allows you to validate your results against reference data so as to 
 
 ### 3. SAR Preprocessing (`src/preprocess/`)
 Turns raw Sentinel-1 products into the pre/post GeoTIFFs consumed by the detection pipeline, by running SNAP GPT graphs stored in `vigisar_graphs/`:
-- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`. The sub-swaths and burst range to process are found automatically from the AOI by `polygon_to_swaths_bursts.py` (footprints rebuilt from the annotation XML, no image data read — see `src/preprocess/readme_polygon_to_swaths_bursts.md`).
+- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`. The sub-swaths and burst range to process are found automatically from the AOI by `polygon_to_swaths_bursts.py` (footprints rebuilt from the annotation XML, no image data read — see `src/preprocess/readme_polygon_to_swaths_bursts.md`). When a sub-swath keeps a single burst, coherence runs `coherence_one_burst.xml` — `coherence.xml` without its Enhanced-Spectral-Diversity node, which needs the overlap between two consecutive bursts and yields an empty product otherwise. Keep the two graphs in sync.
 - **GRD workflow** (`main_preprocess_grd.py`): backscatter only (`gamma0_VH`, `gamma0_VV`).
 - The `--aoi` of every entry point takes either an inline WKT polygon or a path to a WKT / GeoJSON file, in lon/lat WGS84.
 

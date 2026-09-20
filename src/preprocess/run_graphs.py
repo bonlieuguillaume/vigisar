@@ -123,10 +123,11 @@ _GRAPHS_DIR       = os.path.join(_PROJECT_ROOT, "vigisar_graphs")
 _PREPROCESSED_DIR = os.path.join(_PROJECT_ROOT, "data", "preprocessed")
 _TEMP_DIR         = os.path.join(_PREPROCESSED_DIR, "temp")
 
-_GRAPH_BACKSCATTER     = os.path.join(_GRAPHS_DIR, "backscatter.xml")
-_GRAPH_COHERENCE       = os.path.join(_GRAPHS_DIR, "coherence.xml")
-_GRAPH_GATHERING       = os.path.join(_GRAPHS_DIR, "gathering.xml")
-_GRAPH_BACKSCATTER_GRD = os.path.join(_GRAPHS_DIR, "backscatter_grd.xml")
+_GRAPH_BACKSCATTER         = os.path.join(_GRAPHS_DIR, "backscatter.xml")
+_GRAPH_COHERENCE           = os.path.join(_GRAPHS_DIR, "coherence.xml")
+_GRAPH_COHERENCE_ONE_BURST = os.path.join(_GRAPHS_DIR, "coherence_one_burst.xml")
+_GRAPH_GATHERING           = os.path.join(_GRAPHS_DIR, "gathering.xml")
+_GRAPH_BACKSCATTER_GRD     = os.path.join(_GRAPHS_DIR, "backscatter_grd.xml")
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +461,12 @@ def run_coherence(
     and the subswath name is inserted before the file extension
     (e.g. ``coherence_pre_IW1.dim``, ``coherence_pre_IW2.dim``).
 
+    When a subswath keeps a single burst, ``coherence_one_burst.xml`` is used
+    instead of ``coherence.xml``: the two graphs are identical except that the
+    former has no Enhanced-Spectral-Diversity node.  ESD refines the azimuth
+    coregistration from the overlap between consecutive bursts, so with one
+    burst it has nothing to estimate and the graph yields an empty product.
+
     Two output modes depending on ``pair``:
 
     * **No pair** (standalone run): output is written to
@@ -533,7 +540,11 @@ def run_coherence(
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
         }
-        results.append(_run_gpt(gpt_path, _GRAPH_COHERENCE, params, gpt_options))
+        # ESD needs at least two bursts (see docstring): one burst → the
+        # variant without it
+        one_burst = swath["first_burst"] == swath["last_burst"]
+        graph = _GRAPH_COHERENCE_ONE_BURST if one_burst else _GRAPH_COHERENCE
+        results.append(_run_gpt(gpt_path, graph, params, gpt_options))
 
     return results
 
@@ -907,7 +918,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "estimation, deburst, terrain correction, and spatial clipping.\n\n"
             "The subswath and burst range are determined automatically from --aoi.\n"
             "If the AOI spans multiple subswaths the graph runs once per subswath\n"
-            "and each output is suffixed with its name (e.g. coherence_pre_IW2.dim).\n\n"
+            "and each output is suffixed with its name (e.g. coherence_pre_IW2.dim).\n"
+            "A subswath reduced to a single burst is processed with\n"
+            "coherence_one_burst.xml (same graph without Enhanced-Spectral-Diversity,\n"
+            "which needs the overlap between two consecutive bursts).\n\n"
             "Two output modes:\n"
             "  No --pair : standalone run → data/preprocessed/default/coh[_IWx].dim\n"
             "              (or the path given with --output)\n"
