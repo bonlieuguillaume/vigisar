@@ -3,6 +3,7 @@ import os
 import sys
 import argparse
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from typing import Optional
 
 try:
@@ -11,6 +12,111 @@ except ImportError:
     from polygon_to_swaths_bursts import get_intersecting_bursts, parse_polygon  # type: ignore[no-redef]
 
 DEFAULT_GPT = r"C:\Program Files\esa-snap\bin\gpt.exe"
+
+
+# ---------------------------------------------------------------------------
+# GPT memory / performance settings
+# ---------------------------------------------------------------------------
+# Every graph run goes through _run_gpt, which passes these four settings on
+# the gpt command line.  A command-line flag always overrides what SNAP has in
+# gpt.vmoptions and ~/.snap/etc/snap.properties, so what is set here (or given
+# to the CLIs) is what actually runs — the SNAP GUI settings do not apply.
+# `gpt --diag` prints the values a bare gpt would use.
+#
+# The defaults below are the ones a 32 GB / 8-core (16-thread) machine runs
+# comfortably.  How to choose them for another machine:
+#
+#   xmx        Java heap ceiling (-Xmx).  Everything gpt holds — the tile
+#              cache AND the working arrays of the operators (coregistration,
+#              Back-Geocoding, ESD keep whole bursts and the DEM in memory) —
+#              must fit under it.  About 2/3 of the physical RAM, leaving the
+#              rest to the OS, Python and the GeoTIFF tools.  Too low: a Java
+#              OutOfMemoryError on large AOIs.  Too high: the machine swaps,
+#              and the JVM can die on a native allocation (hs_err_pid*.log).
+#
+#   cache      Tile cache (-c), lives INSIDE the heap.  Keeps computed tiles so
+#              that downstream operators do not recompute them.  A ceiling, not
+#              a need: too small only costs time (recomputation), it never
+#              crashes — whereas a big cache always fills up and starves the
+#              operators.  1/4 to 1/3 of the heap is plenty for these graphs.
+#
+#   threads    Tiles computed in parallel (-q).  Working memory of the tiled
+#              operators grows with it.  Up to the number of hardware threads;
+#              the number of physical cores is the sweet spot when memory is
+#              tight (SNAP scales poorly beyond ~8 threads anyway).  Lowering
+#              it is the second lever after the cache on very large AOIs.
+#
+#   tile_size  Edge of the square tiles, in pixels.  Keep a power of two
+#              (256, 512, 1024): it matches the block size of the files on disk
+#              and of the pyramid levels, so every tile maps to whole blocks.
+#              512 is SNAP's default and there is rarely a reason to change it;
+#              1024 lowers the per-tile overhead on big rasters at the cost of
+#              more memory per thread.
+#
+# Neither cache nor threads can shrink what the coregistration operators hold
+# for a given AOI: if a large AOI does not fit, lower the cache first, then the
+# threads, and if it still fails the heap (hence the machine) is the limit.
+
+DEFAULT_XMX       = "21G"
+DEFAULT_CACHE     = "8192M"
+DEFAULT_THREADS   = 16
+DEFAULT_TILE_SIZE = 512
+
+
+@dataclass
+class GptOptions:
+    """Memory / performance settings passed to every gpt call (see above).
+
+    ``xmx`` and ``cache`` are Java size strings (``"21G"``, ``"8192M"``).
+    """
+    xmx: str = DEFAULT_XMX
+    cache: str = DEFAULT_CACHE
+    threads: int = DEFAULT_THREADS
+    tile_size: int = DEFAULT_TILE_SIZE
+
+    def to_args(self) -> list[str]:
+        """The gpt command-line flags for these settings.
+
+        ``-J<opt>`` hands the option to the JVM itself (heap, and system
+        properties, which is how snap.properties keys are overridden);
+        ``-c`` / ``-q`` are gpt's own flags.
+        """
+        return [
+            f"-J-Xmx{self.xmx}",
+            f"-J-Dsnap.jai.defaultTileSize={self.tile_size}",
+            "-c", self.cache,
+            "-q", str(self.threads),
+        ]
+
+
+DEFAULT_GPT_OPTIONS = GptOptions()
+
+
+def add_gpt_options(parser: argparse.ArgumentParser) -> None:
+    """Add --xmx / --cache / --threads / --tile-size to a CLI parser."""
+    g = parser.add_argument_group(
+        "GPT memory / performance",
+        "Override SNAP's settings for this run (a flag always wins over "
+        "gpt.vmoptions and snap.properties).  Rules of thumb: xmx ~ 2/3 of the "
+        "RAM; cache 1/4-1/3 of xmx (too small only costs time, too big starves "
+        "the operators); threads <= hardware threads, physical cores when memory "
+        "is tight; tile-size a power of two, 512 unless you know why.",
+    )
+    g.add_argument("--xmx", default=DEFAULT_XMX, metavar="SIZE",
+                   help=f"Java heap ceiling, e.g. 16G (default: {DEFAULT_XMX})")
+    g.add_argument("--cache", default=DEFAULT_CACHE, metavar="SIZE",
+                   help=f"tile cache, inside the heap, e.g. 4096M (default: {DEFAULT_CACHE})")
+    g.add_argument("--threads", default=DEFAULT_THREADS, type=int, metavar="N",
+                   help=f"tiles computed in parallel (default: {DEFAULT_THREADS})")
+    g.add_argument("--tile-size", default=DEFAULT_TILE_SIZE, type=int, metavar="PX",
+                   help=f"tile edge in pixels, power of two (default: {DEFAULT_TILE_SIZE})")
+
+
+def gpt_options_from_args(args: argparse.Namespace) -> GptOptions:
+    """Build a GptOptions from a namespace produced with add_gpt_options."""
+    return GptOptions(
+        xmx=args.xmx, cache=args.cache, threads=args.threads, tile_size=args.tile_size
+    )
 
 _PROJECT_ROOT     = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 _GRAPHS_DIR       = os.path.join(_PROJECT_ROOT, "vigisar_graphs")
@@ -222,12 +328,19 @@ def _resolve_gathering_bands(
     return bands_pre, bands_post
 
 
-def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> bool:
+def _run_gpt(
+    gpt_path: str,
+    graph_xml: str,
+    params: dict,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
+) -> bool:
     """
     Internal helper: build a GPT command from a parameter dict and execute it.
 
     Parameters are passed as ``-Pkey=value`` flags, substituting ``${key}``
-    placeholders in the XML graph.  Returns True on success, False on failure.
+    placeholders in the XML graph.  Memory / performance flags come from
+    ``gpt_options`` (see the GptOptions section at the top of this module).
+    Returns True on success, False on failure.
 
     Raises:
         FileNotFoundError: If gpt_path does not exist on the filesystem.
@@ -235,16 +348,9 @@ def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> bool:
     if not os.path.exists(gpt_path):
         raise FileNotFoundError(f"GPT executable not found at: {gpt_path}")
 
-    # -e  → full Java stack trace on error
-    # -c  → tile cache size (GPT ignores snap.properties)
-    # -q  → worker thread count (GPT ignores snap.properties)
-    command = [
-        gpt_path,
-        graph_xml,
-        "-e",
-        "-c", "16384M",
-        "-q", "16",
-    ]
+    # -e → full Java stack trace on error; the rest: heap, tile size, cache,
+    # threads — every one of them overrides SNAP's own configuration files.
+    command = [gpt_path, graph_xml, "-e", *gpt_options.to_args()]
     for key, value in params.items():
         command.append(f"-P{key}={value}")
 
@@ -267,6 +373,7 @@ def run_backscatter(
     aoi: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[Optional[str]]:
     """
     Run the backscatter graph on two Sentinel-1 SLC products.
@@ -296,6 +403,8 @@ def run_backscatter(
             If multiple subswaths are found, the subswath name is inserted before
             the extension (e.g. ``backscatter_IW2.dim``).
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list: One entry per processed subswath (stdout string or None on error).
@@ -324,7 +433,7 @@ def run_backscatter(
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
         }
-        results.append(_run_gpt(gpt_path, _GRAPH_BACKSCATTER, params))
+        results.append(_run_gpt(gpt_path, _GRAPH_BACKSCATTER, params, gpt_options))
 
     return results
 
@@ -336,6 +445,7 @@ def run_coherence(
     pair: Optional[str] = None,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[Optional[str]]:
     """
     Run the coherence graph on two Sentinel-1 SLC products.
@@ -378,6 +488,8 @@ def run_coherence(
             * If ``pair`` is not given: full path to the output file.
               Defaults to ``data/preprocessed/default/coh.dim``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list: One entry per processed subswath (stdout string or None on error).
@@ -421,7 +533,7 @@ def run_coherence(
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
         }
-        results.append(_run_gpt(gpt_path, _GRAPH_COHERENCE, params))
+        results.append(_run_gpt(gpt_path, _GRAPH_COHERENCE, params, gpt_options))
 
     return results
 
@@ -432,6 +544,7 @@ def run_gathering(
     input_coh_post: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[str]:
     """
     Run the gathering graph to collocate a backscatter product with two
@@ -459,6 +572,8 @@ def run_gathering(
             ``<name>_post.tif``.  If None, outputs go to
             ``data/preprocessed/default/`` as ``pre.tif`` and ``post.tif``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list[str]: Paths of the GeoTIFF files that were successfully written
@@ -498,7 +613,7 @@ def run_gathering(
         "bands_pre":     ",".join(bands_pre),
         "bands_post":    ",".join(bands_post),
     }
-    _run_gpt(gpt_path, _GRAPH_GATHERING, params)
+    _run_gpt(gpt_path, _GRAPH_GATHERING, params, gpt_options)
 
     produced = []
     clean_pre  = [_clean_band_name(b) for b in bands_pre]
@@ -584,6 +699,7 @@ def run_backscatter_grd(
     aoi: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[str]:
     """
     Run the GRD backscatter graph on two Sentinel-1 GRD products and write
@@ -617,6 +733,8 @@ def run_backscatter_grd(
             * Full path prefix  → ``<prefix>_pre.tif`` and ``<prefix>_post.tif``
               (the folder must already exist or will be created)
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list[str]: Paths of the two GeoTIFFs that were successfully written
@@ -660,7 +778,7 @@ def run_backscatter_grd(
         "input2": post,
         "aoi":    _aoi_to_wkt(aoi),
         "output": tmp_dim,
-    })
+    }, gpt_options)
 
     if not success or not os.path.exists(tmp_dim):
         return []
@@ -740,6 +858,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})",
     )
+    add_gpt_options(common)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -892,6 +1011,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main():
     parser = _build_parser()
     args = parser.parse_args()
+    gpt_options = gpt_options_from_args(args)
 
     if args.command == "backscatter":
         run_backscatter(
@@ -900,6 +1020,7 @@ def main():
             aoi=args.aoi,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "coherence":
         run_coherence(
@@ -909,6 +1030,7 @@ def main():
             pair=args.pair,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "gathering":
         run_gathering(
@@ -917,6 +1039,7 @@ def main():
             input_coh_post=args.input_coh_post,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "backscatter-grd":
         tifs = run_backscatter_grd(
@@ -925,6 +1048,7 @@ def main():
             aoi=args.aoi,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
         for path in tifs:
             print(path)
