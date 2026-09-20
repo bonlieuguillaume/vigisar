@@ -804,10 +804,28 @@ def run_mosaic(inputs: list[str], output: str) -> str:
     Intended for use after ``run_gathering`` when the AOI spans multiple subswaths:
     pass the per-swath pre (or post) GeoTIFFs and receive a single mosaicked file.
 
-    If only one input is given the file is copied as-is (no Warp needed).
+    Where inputs overlap, each pixel takes the value of the input in which it
+    lies **farthest from an invalid pixel**.  Adjacent subswaths overlap by
+    1-2 km, and every per-swath product is degraded along its own swath edge:
+    SNAP leaves a 1-px line of NaN in the gamma0 bands there, and the
+    coherence bands are zeroed over a wider fringe than the backscatter ones.
+    A plain "last input wins" Warp with ``srcNodata=0`` copies the NaN line
+    over the neighbour's good data (NaN is not 0) — one black line per swath
+    edge in the mosaic.  Ranking by distance to the nearest invalid pixel
+    hands those fringes to the other swath's interior, while on the outer
+    boundary of the AOI, where only one input exists, nothing is lost.  The
+    output never holds NaN: uncovered pixels are 0, the declared nodata.
+
+    All inputs are first warped (nearest neighbour) onto the union grid of
+    the first input's CRS and resolution; with ``alignToStandardGrid`` in the
+    graphs this involves no resampling.  Everything is held in memory: for N
+    inputs of B bands over an H x W union, N x B x H x W float32.
+
+    If only one input is given the file is copied as-is.
 
     Args:
-        inputs (list[str]): Ordered list of GeoTIFF paths to mosaic.
+        inputs (list[str]): Ordered list of GeoTIFF paths to mosaic.  Band
+            layout, names and nodata (0.0) are taken from the first one.
         output (str): Output GeoTIFF path.
 
     Returns:
@@ -815,7 +833,7 @@ def run_mosaic(inputs: list[str], output: str) -> str:
 
     Raises:
         RuntimeError: If GDAL fails to build the mosaic.
-        ImportError: If osgeo.gdal is not available.
+        ImportError: If osgeo.gdal or scipy is not available.
     """
     if not inputs:
         raise ValueError("inputs must not be empty")
@@ -831,16 +849,63 @@ def run_mosaic(inputs: list[str], output: str) -> str:
         from osgeo import gdal
     except ImportError:
         raise ImportError("osgeo.gdal is required for mosaicking")
+    import numpy as np
+    from scipy import ndimage
 
     gdal.UseExceptions()
-    gdal.PushErrorHandler("CPLQuietErrorHandler")
-    ds = gdal.Warp(output, inputs, format="GTiff", resampleAlg="near",
-                   srcNodata=0.0, dstNodata=0.0)
-    gdal.PopErrorHandler()
 
-    if ds is None:
+    # Union grid: let Warp work out the extent of all inputs in the CRS and
+    # resolution of the first one, without writing anything yet.
+    union = gdal.Warp("", inputs, format="MEM", resampleAlg="near",
+                      srcNodata=0.0, dstNodata=0.0)
+    if union is None:
         raise RuntimeError(f"Mosaic failed → {output!r}")
-    ds = None
+    gt, proj = union.GetGeoTransform(), union.GetProjection()
+    width, height, n_bands = union.RasterXSize, union.RasterYSize, union.RasterCount
+    x_min, y_max = gt[0], gt[3]
+    x_max, y_min = x_min + width * gt[1], y_max + height * gt[5]
+    union = None
+
+    # Each input on that grid, plus its distance-to-nodata map
+    stack, dist = [], []
+    for path in inputs:
+        ds = gdal.Warp("", path, format="MEM", resampleAlg="near",
+                       outputBounds=(x_min, y_min, x_max, y_max),
+                       xRes=abs(gt[1]), yRes=abs(gt[5]), dstSRS=proj,
+                       srcNodata=0.0, dstNodata=0.0)
+        arr = ds.ReadAsArray().astype(np.float32)      # (bands, H, W)
+        ds = None
+        if arr.ndim == 2:
+            arr = arr[None]
+        # Valid = every band finite and non-zero.  SNAP leaves NaN (not 0)
+        # in the gamma0 bands along the swath edge — a 1-px line that Warp's
+        # srcNodata=0 would happily copy — and the coherence window zeroes a
+        # wider fringe than the backscatter one: a pixel counts only where all
+        # bands are usable, so the other swath's interior wins there.
+        valid = np.isfinite(arr).all(axis=0) & (arr != 0).all(axis=0)
+        # Distance (pixels) to the nearest invalid pixel; 0 where invalid
+        dist.append(ndimage.distance_transform_edt(valid))
+        stack.append(arr)
+
+    dist = np.stack(dist)                               # (N, H, W)
+    stack = np.stack(stack)                             # (N, bands, H, W)
+    best = np.argmax(dist, axis=0)                      # (H, W): winning input
+    mosaic = np.take_along_axis(stack, best[None, None], axis=0)[0]
+    mosaic[:, dist.max(axis=0) == 0] = 0.0              # covered by no input: nodata, never NaN
+
+    # Write, carrying over band names and the nodata declaration
+    src = gdal.Open(inputs[0])
+    driver = gdal.GetDriverByName("GTiff")
+    out = driver.Create(output, width, height, n_bands, gdal.GDT_Float32)
+    out.SetGeoTransform(gt)
+    out.SetProjection(proj)
+    for i in range(n_bands):
+        band = out.GetRasterBand(i + 1)
+        band.WriteArray(mosaic[i])
+        band.SetDescription(src.GetRasterBand(i + 1).GetDescription())
+        band.SetNoDataValue(0.0)
+    out.FlushCache()
+    out = src = None
     return output
 
 
@@ -857,7 +922,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "  coherence        — coherence via ESD coregistration\n"
             "  gathering        — collocate backscatter + coherence into pre/post products\n\n"
             "Subcommands (GRD pipeline):\n"
-            "  backscatter-grd  — Gamma0 backscatter from two GRD products (no subswath split)\n"
+            "  backscatter-grd  — Gamma0 backscatter from two GRD products (no subswath split)\n\n"
+            "Utility:\n"
+            "  mosaic           — merge per-subswath GeoTIFFs into one (no GPT involved)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1019,12 +1086,38 @@ def _build_parser() -> argparse.ArgumentParser:
                            "If omitted, writes pre.tif and post.tif to data/preprocessed/default/."
                        ))
 
+    # -- mosaic --------------------------------------------------------------
+    # No GPT here, so no --gpt / memory flags: not built on `common`.
+    p_mo = subparsers.add_parser(
+        "mosaic",
+        help="Merge per-subswath GeoTIFFs (same bands) into a single file",
+        description=(
+            "Merge two or more GeoTIFFs with the same bands — typically the per-subswath\n"
+            "outputs of gathering (<name>_IW1_pre.tif, <name>_IW2_pre.tif, ...) — into one.\n\n"
+            "Where inputs overlap, each pixel is taken from the input in which it lies\n"
+            "farthest from an invalid pixel, so the degraded swath edges (a 1-px NaN line\n"
+            "in gamma0, a zeroed fringe in coherence) are replaced by the neighbour's\n"
+            "interior instead of being painted over it.  Band names and nodata (0) are\n"
+            "carried over from the first input.  Everything is held in memory."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_mo.add_argument("--inputs", required=True, nargs="+", metavar="PATH",
+                      help="[required] Two or more GeoTIFFs to merge, e.g. zta_IW2_pre.tif zta_IW3_pre.tif")
+    p_mo.add_argument("--output", required=True, metavar="PATH",
+                      help="[required] Output GeoTIFF path")
+
     return parser
 
 
 def main():
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.command == "mosaic":
+        print(run_mosaic(args.inputs, args.output))
+        return
+
     gpt_options = gpt_options_from_args(args)
 
     if args.command == "backscatter":

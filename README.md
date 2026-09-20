@@ -54,6 +54,8 @@ Turns raw Sentinel-1 products into the pre/post GeoTIFFs consumed by the detecti
 >
 > Example, a large AOI on a 16 GB laptop: `python src/preprocess/main_preprocess.py ... --xmx 10G --cache 3G --threads 4`.
 
+> **Output grid.** Every `Terrain-Correction` node runs with `alignToStandardGrid=true` (origin 0,0): the 10 m output grid is snapped so that pixel edges fall on multiples of 10 m of the UTM easting/northing, instead of starting at each product's own bounding-box corner. Terrain-Correction interpolates exactly once either way — this only fixes *where* the grid is laid — but all products of the same UTM zone (sub-swaths, dates, backscatter vs coherence) then share one grid: `run_mosaic` and `Collocate` copy pixels instead of resampling them, and it is the same grid as GDAL's `-tap` or Sentinel-2's 10 m tiles. Products generated before this switch sit a fraction of a pixel off the new ones — regenerate them before mixing.
+>
 > **Band naming & master/slave conventions.** SNAP band names (dates, `_mst`/`_slv`, subswath) are unreliable, so the pipeline never parses them: it relies on the **order of the sources** in the graphs (first source = master, bands written first) and on Collocate suffixes (`_M`, `_S0`, `_S1`) that are *predicted* by the Python code. These couplings and the resulting conventions are documented **directly inside the graph files** — see the header comment of `vigisar_graphs/gathering.xml` and the comments on the `CreateStack` / `Back-Geocoding` nodes in `backscatter.xml`, `backscatter_grd.xml` and `coherence.xml`, as well as the docstring of `_resolve_gathering_bands` in `src/preprocess/run_graphs.py`. Read them before editing a graph or re-saving it from SNAP's Graph Builder.
 
 
