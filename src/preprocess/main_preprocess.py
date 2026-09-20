@@ -4,15 +4,15 @@ import os
 try:
     from .run_graphs import (
         run_backscatter, run_coherence, run_gathering, run_mosaic,
-        DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
+        polygon_to_swaths_bursts, GptOptions, add_gpt_options, gpt_options_from_args,
+        DEFAULT_GPT, DEFAULT_GPT_OPTIONS, _TEMP_DIR, _PREPROCESSED_DIR,
     )
-    from .find_swaths_and_bursts import find_subswath
 except ImportError:
     from run_graphs import (  # type: ignore[no-redef]
         run_backscatter, run_coherence, run_gathering, run_mosaic,
-        DEFAULT_GPT, _TEMP_DIR, _PREPROCESSED_DIR,
+        polygon_to_swaths_bursts, GptOptions, add_gpt_options, gpt_options_from_args,
+        DEFAULT_GPT, DEFAULT_GPT_OPTIONS, _TEMP_DIR, _PREPROCESSED_DIR,
     )
-    from find_swaths_and_bursts import find_subswath  # type: ignore[no-redef]
 
 
 def main_preprocess(
@@ -23,6 +23,7 @@ def main_preprocess(
     aoi: str,
     output_name: str,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> dict:
     """
     Full Vigisar SAR preprocessing pipeline.
@@ -52,7 +53,8 @@ def main_preprocess(
         pre2 (str): Second SLC product.
         post1 (str): Third SLC product.
         post2 (str): Latest SLC product.
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
         output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
 
             * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
@@ -61,6 +63,9 @@ def main_preprocess(
               written inside that directory (created if needed), using the
               last segment (``zta6_slc``) as filename prefix.
         gpt_path (str): Path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size handed to
+            every gpt call (see the top of ``run_graphs.py`` for how to
+            choose them).
 
     Returns:
         dict: ``{"pre": <path>, "post": <path>}`` — absolute paths of the
@@ -69,17 +74,20 @@ def main_preprocess(
     Raises:
         ValueError: If no subswath intersects the AOI.
     """
-    # 1. Detect subswaths once (pre2 as reference product)
-    swaths = find_subswath(pre2, aoi)
+    # 1. Detect subswaths once (pre2 as reference product). Coarse mode: an
+    # AOI on a burst seam also gets the neighbouring burst — a missing burst
+    # would leave a silent nodata hole in the final GeoTIFFs, an extra one
+    # costs seconds (see polygon_to_swaths_bursts in run_graphs).
+    swaths = polygon_to_swaths_bursts(pre2, aoi)
     if not swaths:
         raise ValueError(f"No subswath intersects the given AOI in {pre2!r}")
 
     multi = len(swaths) > 1
 
     # 2-4. Per-pair processing (each function loops over swaths internally)
-    run_backscatter(pre2, post1, aoi, gpt_path=gpt_path)
-    run_coherence(pre1, pre2,   aoi, pair="pre",  gpt_path=gpt_path)
-    run_coherence(post1, post2, aoi, pair="post", gpt_path=gpt_path)
+    run_backscatter(pre2, post1, aoi, gpt_path=gpt_path, gpt_options=gpt_options)
+    run_coherence(pre1, pre2,   aoi, pair="pre",  gpt_path=gpt_path, gpt_options=gpt_options)
+    run_coherence(post1, post2, aoi, pair="post", gpt_path=gpt_path, gpt_options=gpt_options)
 
     # 5. Gathering — all outputs go into the same output folder
     if os.sep in output_name or "/" in output_name:
@@ -105,7 +113,8 @@ def main_preprocess(
         # (single-swath: zta1/zta1, multi-swath: zta1/zta1_IW1, zta1/zta1_IW2)
         gather_prefix = os.path.join(out_dir, f"{prefix}{suffix}")
         tifs = run_gathering(bs_path, coh_pre_path, coh_post_path,
-                             output=gather_prefix, gpt_path=gpt_path)
+                             output=gather_prefix, gpt_path=gpt_path,
+                             gpt_options=gpt_options)
 
         if len(tifs) >= 1:
             pre_tifs.append(tifs[0])
@@ -161,10 +170,12 @@ def main():
     parser.add_argument("--pre2",   required=True, metavar="PATH", help="[required] Second SLC product (.zip or .SAFE)")
     parser.add_argument("--post1",  required=True, metavar="PATH", help="[required] Third SLC product (.zip or .SAFE)")
     parser.add_argument("--post2",  required=True, metavar="PATH", help="[required] Latest SLC product (.zip or .SAFE)")
-    parser.add_argument("--aoi",    required=True, metavar="WKT",
+    parser.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                         help=(
-                            "[required] Area of interest as a WKT polygon in WGS84.  "
-                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                            "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                            '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                            "WKT / GeoJSON file.  Used to locate the subswath/burst range and "
+                            "to clip the outputs."
                         ))
     parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
                         help=(
@@ -177,6 +188,7 @@ def main():
                         ))
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
                         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
+    add_gpt_options(parser)
 
     args = parser.parse_args()
     result = main_preprocess(
@@ -187,6 +199,7 @@ def main():
         aoi=args.aoi,
         output_name=args.output,
         gpt_path=args.gpt,
+        gpt_options=gpt_options_from_args(args),
     )
     print(f"Pre-event product : {result['pre']}")
     print(f"Post-event product: {result['post']}")

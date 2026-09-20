@@ -3,24 +3,131 @@ import os
 import sys
 import argparse
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from typing import Optional
 
 try:
-    from .find_swaths_and_bursts import find_subswath
+    from .polygon_to_swaths_bursts import get_intersecting_bursts, parse_polygon
 except ImportError:
-    from find_swaths_and_bursts import find_subswath  # type: ignore[no-redef]
+    from polygon_to_swaths_bursts import get_intersecting_bursts, parse_polygon  # type: ignore[no-redef]
 
 DEFAULT_GPT = r"C:\Program Files\esa-snap\bin\gpt.exe"
+
+
+# ---------------------------------------------------------------------------
+# GPT memory / performance settings
+# ---------------------------------------------------------------------------
+# Every graph run goes through _run_gpt, which passes these four settings on
+# the gpt command line.  A command-line flag always overrides what SNAP has in
+# gpt.vmoptions and ~/.snap/etc/snap.properties, so what is set here (or given
+# to the CLIs) is what actually runs — the SNAP GUI settings do not apply.
+# `gpt --diag` prints the values a bare gpt would use.
+#
+# The defaults below are the ones a 32 GB / 8-core (16-thread) machine runs
+# comfortably.  How to choose them for another machine:
+#
+#   xmx        Java heap ceiling (-Xmx).  Everything gpt holds — the tile
+#              cache AND the working arrays of the operators (coregistration,
+#              Back-Geocoding, ESD keep whole bursts and the DEM in memory) —
+#              must fit under it.  About 2/3 of the physical RAM, leaving the
+#              rest to the OS, Python and the GeoTIFF tools.  Too low: a Java
+#              OutOfMemoryError on large AOIs.  Too high: the machine swaps,
+#              and the JVM can die on a native allocation (hs_err_pid*.log).
+#
+#   cache      Tile cache (-c), lives INSIDE the heap.  Keeps computed tiles so
+#              that downstream operators do not recompute them.  A ceiling, not
+#              a need: too small only costs time (recomputation), it never
+#              crashes — whereas a big cache always fills up and starves the
+#              operators.  1/4 to 1/3 of the heap is plenty for these graphs.
+#
+#   threads    Tiles computed in parallel (-q).  Working memory of the tiled
+#              operators grows with it.  Up to the number of hardware threads;
+#              the number of physical cores is the sweet spot when memory is
+#              tight (SNAP scales poorly beyond ~8 threads anyway).  Lowering
+#              it is the second lever after the cache on very large AOIs.
+#
+#   tile_size  Edge of the square tiles, in pixels.  Keep a power of two
+#              (256, 512, 1024): it matches the block size of the files on disk
+#              and of the pyramid levels, so every tile maps to whole blocks.
+#              512 is SNAP's default and there is rarely a reason to change it;
+#              1024 lowers the per-tile overhead on big rasters at the cost of
+#              more memory per thread.
+#
+# Neither cache nor threads can shrink what the coregistration operators hold
+# for a given AOI: if a large AOI does not fit, lower the cache first, then the
+# threads, and if it still fails the heap (hence the machine) is the limit.
+
+DEFAULT_XMX       = "21G"
+DEFAULT_CACHE     = "8192M"
+DEFAULT_THREADS   = 16
+DEFAULT_TILE_SIZE = 512
+
+
+@dataclass
+class GptOptions:
+    """Memory / performance settings passed to every gpt call (see above).
+
+    ``xmx`` and ``cache`` are Java size strings (``"21G"``, ``"8192M"``).
+    """
+    xmx: str = DEFAULT_XMX
+    cache: str = DEFAULT_CACHE
+    threads: int = DEFAULT_THREADS
+    tile_size: int = DEFAULT_TILE_SIZE
+
+    def to_args(self) -> list[str]:
+        """The gpt command-line flags for these settings.
+
+        ``-J<opt>`` hands the option to the JVM itself (heap, and system
+        properties, which is how snap.properties keys are overridden);
+        ``-c`` / ``-q`` are gpt's own flags.
+        """
+        return [
+            f"-J-Xmx{self.xmx}",
+            f"-J-Dsnap.jai.defaultTileSize={self.tile_size}",
+            "-c", self.cache,
+            "-q", str(self.threads),
+        ]
+
+
+DEFAULT_GPT_OPTIONS = GptOptions()
+
+
+def add_gpt_options(parser: argparse.ArgumentParser) -> None:
+    """Add --xmx / --cache / --threads / --tile-size to a CLI parser."""
+    g = parser.add_argument_group(
+        "GPT memory / performance",
+        "Override SNAP's settings for this run (a flag always wins over "
+        "gpt.vmoptions and snap.properties).  Rules of thumb: xmx ~ 2/3 of the "
+        "RAM; cache 1/4-1/3 of xmx (too small only costs time, too big starves "
+        "the operators); threads <= hardware threads, physical cores when memory "
+        "is tight; tile-size a power of two, 512 unless you know why.",
+    )
+    g.add_argument("--xmx", default=DEFAULT_XMX, metavar="SIZE",
+                   help=f"Java heap ceiling, e.g. 16G (default: {DEFAULT_XMX})")
+    g.add_argument("--cache", default=DEFAULT_CACHE, metavar="SIZE",
+                   help=f"tile cache, inside the heap, e.g. 4096M (default: {DEFAULT_CACHE})")
+    g.add_argument("--threads", default=DEFAULT_THREADS, type=int, metavar="N",
+                   help=f"tiles computed in parallel (default: {DEFAULT_THREADS})")
+    g.add_argument("--tile-size", default=DEFAULT_TILE_SIZE, type=int, metavar="PX",
+                   help=f"tile edge in pixels, power of two (default: {DEFAULT_TILE_SIZE})")
+
+
+def gpt_options_from_args(args: argparse.Namespace) -> GptOptions:
+    """Build a GptOptions from a namespace produced with add_gpt_options."""
+    return GptOptions(
+        xmx=args.xmx, cache=args.cache, threads=args.threads, tile_size=args.tile_size
+    )
 
 _PROJECT_ROOT     = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 _GRAPHS_DIR       = os.path.join(_PROJECT_ROOT, "vigisar_graphs")
 _PREPROCESSED_DIR = os.path.join(_PROJECT_ROOT, "data", "preprocessed")
 _TEMP_DIR         = os.path.join(_PREPROCESSED_DIR, "temp")
 
-_GRAPH_BACKSCATTER     = os.path.join(_GRAPHS_DIR, "backscatter.xml")
-_GRAPH_COHERENCE       = os.path.join(_GRAPHS_DIR, "coherence.xml")
-_GRAPH_GATHERING       = os.path.join(_GRAPHS_DIR, "gathering.xml")
-_GRAPH_BACKSCATTER_GRD = os.path.join(_GRAPHS_DIR, "backscatter_grd.xml")
+_GRAPH_BACKSCATTER         = os.path.join(_GRAPHS_DIR, "backscatter.xml")
+_GRAPH_COHERENCE           = os.path.join(_GRAPHS_DIR, "coherence.xml")
+_GRAPH_COHERENCE_ONE_BURST = os.path.join(_GRAPHS_DIR, "coherence_one_burst.xml")
+_GRAPH_GATHERING           = os.path.join(_GRAPHS_DIR, "gathering.xml")
+_GRAPH_BACKSCATTER_GRD     = os.path.join(_GRAPHS_DIR, "backscatter_grd.xml")
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +206,61 @@ def _add_swath_suffix(path: str, swath: str) -> str:
     return f"{base}_{swath}{ext}"
 
 
+def _aoi_to_wkt(aoi: str) -> str:
+    """Normalise the AOI to an inline WKT string, the only form GPT accepts.
+
+    ``aoi`` may be an inline WKT string or a path to a WKT / GeoJSON file
+    (see ``polygon_to_swaths_bursts.parse_polygon``); the graphs' Subset node
+    reads ``${aoi}`` as WKT, so a file is parsed and re-serialised here.
+    """
+    return parse_polygon(aoi).wkt
+
+
+def polygon_to_swaths_bursts(product_path: str, aoi: str, coarse: bool = True) -> list[dict]:
+    """
+    Find which Sentinel-1 IW subswath(es) and burst range intersect the AOI.
+
+    Thin wrapper around ``polygon_to_swaths_bursts.get_intersecting_bursts``
+    (the module of the same name) that reshapes its ``{swath: [burst numbers]}``
+    summary into the triplets TOPSAR-Split expects (``subswath``,
+    ``first_burst``, ``last_burst``).  See ``readme_polygon_to_swaths_bursts.md``
+    for how the footprints are rebuilt from the annotation XML.
+
+    Why ``coarse`` defaults to True here (the module itself defaults to False):
+    the footprints are rebuilt from the geolocation grid, whose rows sit on the
+    burst boundaries, so consecutive bursts *touch* without overlapping and
+    the outline is only accurate to ~1 km near the edges — whereas the real
+    valid data of neighbouring bursts overlap by about a kilometre.  An AOI
+    whose edge falls in that band can therefore need a burst the strict test
+    misses.  In this pipeline the cost of the two errors is very asymmetric:
+    the AOI is also the Subset clip applied after terrain correction, so a
+    missing burst does not raise anything — it leaves a nodata hole inside the
+    final GeoTIFF, which surfaces much later as spurious "changes" in the
+    detection.  An extra burst only costs a few seconds of processing and is
+    stitched cleanly by TOPSAR-Deburst.  Dilating the footprints by ~2 km
+    before the test (``coarse=True``) buys the recall at that price.
+
+    Args:
+        product_path (str): Sentinel-1 SLC product (.zip archive or .SAFE directory).
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
+        coarse (bool): Dilate the footprints before the test (default True,
+            see above).  Set False to reproduce the module's strict result.
+
+    Returns:
+        List of dicts, one per intersecting subswath, sorted by subswath, e.g.::
+
+            [{"subswath": "IW2", "first_burst": 3, "last_burst": 5}]
+
+        Empty if no subswath intersects the AOI.
+    """
+    _, summary = get_intersecting_bursts(product_path, aoi, coarse=coarse)
+    return [
+        {"subswath": swath, "first_burst": min(bursts), "last_burst": max(bursts)}
+        for swath, bursts in sorted(summary.items())
+    ]
+
+
 def _read_dimap_band_names(dim_path: str) -> list[str]:
     root = ET.parse(dim_path).getroot()
     return [el.text for el in root.findall(".//Spectral_Band_Info/BAND_NAME")]
@@ -167,12 +329,19 @@ def _resolve_gathering_bands(
     return bands_pre, bands_post
 
 
-def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> bool:
+def _run_gpt(
+    gpt_path: str,
+    graph_xml: str,
+    params: dict,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
+) -> bool:
     """
     Internal helper: build a GPT command from a parameter dict and execute it.
 
     Parameters are passed as ``-Pkey=value`` flags, substituting ``${key}``
-    placeholders in the XML graph.  Returns True on success, False on failure.
+    placeholders in the XML graph.  Memory / performance flags come from
+    ``gpt_options`` (see the GptOptions section at the top of this module).
+    Returns True on success, False on failure.
 
     Raises:
         FileNotFoundError: If gpt_path does not exist on the filesystem.
@@ -180,16 +349,9 @@ def _run_gpt(gpt_path: str, graph_xml: str, params: dict) -> bool:
     if not os.path.exists(gpt_path):
         raise FileNotFoundError(f"GPT executable not found at: {gpt_path}")
 
-    # -e  → full Java stack trace on error
-    # -c  → tile cache size (GPT ignores snap.properties)
-    # -q  → worker thread count (GPT ignores snap.properties)
-    command = [
-        gpt_path,
-        graph_xml,
-        "-e",
-        "-c", "16384M",
-        "-q", "16",
-    ]
+    # -e → full Java stack trace on error; the rest: heap, tile size, cache,
+    # threads — every one of them overrides SNAP's own configuration files.
+    command = [gpt_path, graph_xml, "-e", *gpt_options.to_args()]
     for key, value in params.items():
         command.append(f"-P{key}={value}")
 
@@ -212,6 +374,7 @@ def run_backscatter(
     aoi: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[Optional[str]]:
     """
     Run the backscatter graph on two Sentinel-1 SLC products.
@@ -222,9 +385,9 @@ def run_backscatter(
         → Speckle-Filter → Terrain-Correction → Subset → Write
 
     The subswath and burst range are determined automatically from ``aoi`` using
-    ``find_subswath``.  If the AOI spans multiple subswaths the graph is run
-    once per subswath and the outputs are suffixed with the subswath name
-    (e.g. ``backscatter_IW2.dim``).
+    ``polygon_to_swaths_bursts`` (coarse mode, see its docstring).  If the AOI
+    spans multiple subswaths the graph is run once per subswath and the outputs
+    are suffixed with the subswath name (e.g. ``backscatter_IW2.dim``).
 
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
@@ -232,14 +395,17 @@ def run_backscatter(
             output stack (required by ``run_gathering``).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
             Should be the post1 image.
-        aoi (str): Area of interest as a WKT polygon in WGS84.  Used both to
-            locate the correct subswath/burst range and to spatially clip the
-            Terrain-Correction output via the Subset node.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.  Used both to locate the correct subswath/burst
+            range and to spatially clip the Terrain-Correction output via the
+            Subset node.
         output (str, optional): Full path for the output product (.dim).
             Defaults to ``data/preprocessed/temp/backscatter.dim``.
             If multiple subswaths are found, the subswath name is inserted before
             the extension (e.g. ``backscatter_IW2.dim``).
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list: One entry per processed subswath (stdout string or None on error).
@@ -248,9 +414,10 @@ def run_backscatter(
         FileNotFoundError: If gpt_path does not exist.
         ValueError: If the AOI does not intersect any subswath in input1.
     """
-    swaths = find_subswath(input1, aoi)
+    swaths = polygon_to_swaths_bursts(input1, aoi)
     if not swaths:
         raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+    aoi_wkt = _aoi_to_wkt(aoi)
 
     base_path = output if output is not None else os.path.join(_TEMP_DIR, "backscatter.dim")
     os.makedirs(os.path.dirname(os.path.abspath(base_path)), exist_ok=True)
@@ -262,12 +429,12 @@ def run_backscatter(
             "input1":      input1,
             "input2":      input2,
             "output":      out,
-            "aoi":         aoi,
+            "aoi":         aoi_wkt,
             "subswath":    swath["subswath"],
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
         }
-        results.append(_run_gpt(gpt_path, _GRAPH_BACKSCATTER, params))
+        results.append(_run_gpt(gpt_path, _GRAPH_BACKSCATTER, params, gpt_options))
 
     return results
 
@@ -279,6 +446,7 @@ def run_coherence(
     pair: Optional[str] = None,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[Optional[str]]:
     """
     Run the coherence graph on two Sentinel-1 SLC products.
@@ -292,6 +460,12 @@ def run_coherence(
     If the AOI spans multiple subswaths the graph is run once per subswath
     and the subswath name is inserted before the file extension
     (e.g. ``coherence_pre_IW1.dim``, ``coherence_pre_IW2.dim``).
+
+    When a subswath keeps a single burst, ``coherence_one_burst.xml`` is used
+    instead of ``coherence.xml``: the two graphs are identical except that the
+    former has no Enhanced-Spectral-Diversity node.  ESD refines the azimuth
+    coregistration from the overlap between consecutive bursts, so with one
+    burst it has nothing to estimate and the graph yields an empty product.
 
     Two output modes depending on ``pair``:
 
@@ -307,7 +481,8 @@ def run_coherence(
     Args:
         input1 (str): Path to the master Sentinel-1 SLC product (.zip or .SAFE).
         input2 (str): Path to the secondary Sentinel-1 SLC product (.zip or .SAFE).
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.
         pair (str, optional): ``"pre"`` or ``"post"``.  When given, the output is
             placed in the temp folder with a ``_pre`` / ``_post`` suffix so that
             ``run_gathering`` can find it.  When omitted, the output goes to
@@ -320,6 +495,8 @@ def run_coherence(
             * If ``pair`` is not given: full path to the output file.
               Defaults to ``data/preprocessed/default/coh.dim``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list: One entry per processed subswath (stdout string or None on error).
@@ -332,9 +509,10 @@ def run_coherence(
     if pair is not None and pair not in ("pre", "post"):
         raise ValueError(f"pair must be 'pre', 'post', or None, got {pair!r}")
 
-    swaths = find_subswath(input1, aoi)
+    swaths = polygon_to_swaths_bursts(input1, aoi)
     if not swaths:
         raise ValueError(f"The AOI does not intersect any subswath in {input1}")
+    aoi_wkt = _aoi_to_wkt(aoi)
 
     if pair is None:
         if output is None:
@@ -357,12 +535,16 @@ def run_coherence(
             "input1":      input1,
             "input2":      input2,
             "output":      out,
-            "aoi":         aoi,
+            "aoi":         aoi_wkt,
             "subswath":    swath["subswath"],
             "first_burst": str(swath["first_burst"]),
             "last_burst":  str(swath["last_burst"]),
         }
-        results.append(_run_gpt(gpt_path, _GRAPH_COHERENCE, params))
+        # ESD needs at least two bursts (see docstring): one burst → the
+        # variant without it
+        one_burst = swath["first_burst"] == swath["last_burst"]
+        graph = _GRAPH_COHERENCE_ONE_BURST if one_burst else _GRAPH_COHERENCE
+        results.append(_run_gpt(gpt_path, graph, params, gpt_options))
 
     return results
 
@@ -373,6 +555,7 @@ def run_gathering(
     input_coh_post: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[str]:
     """
     Run the gathering graph to collocate a backscatter product with two
@@ -400,6 +583,8 @@ def run_gathering(
             ``<name>_post.tif``.  If None, outputs go to
             ``data/preprocessed/default/`` as ``pre.tif`` and ``post.tif``.
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list[str]: Paths of the GeoTIFF files that were successfully written
@@ -439,7 +624,7 @@ def run_gathering(
         "bands_pre":     ",".join(bands_pre),
         "bands_post":    ",".join(bands_post),
     }
-    _run_gpt(gpt_path, _GRAPH_GATHERING, params)
+    _run_gpt(gpt_path, _GRAPH_GATHERING, params, gpt_options)
 
     produced = []
     clean_pre  = [_clean_band_name(b) for b in bands_pre]
@@ -525,6 +710,7 @@ def run_backscatter_grd(
     aoi: str,
     output: Optional[str] = None,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> list[str]:
     """
     Run the GRD backscatter graph on two Sentinel-1 GRD products and write
@@ -547,8 +733,9 @@ def run_backscatter_grd(
             Used as the master image (reference for coregistration).
         post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
             Used as the slave image.
-        aoi (str): Area of interest as a WKT polygon in WGS84.  Used to clip
-            the output after terrain correction.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path to
+            a WKT / GeoJSON file.  Used to clip the output after terrain
+            correction.
         output (str, optional): Controls where the two output GeoTIFFs are written.
             Follows the same convention as ``run_gathering``:
 
@@ -557,6 +744,8 @@ def run_backscatter_grd(
             * Full path prefix  → ``<prefix>_pre.tif`` and ``<prefix>_post.tif``
               (the folder must already exist or will be created)
         gpt_path (str): Absolute path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size for gpt
+            (see the top of this module).
 
     Returns:
         list[str]: Paths of the two GeoTIFFs that were successfully written
@@ -598,9 +787,9 @@ def run_backscatter_grd(
     success = _run_gpt(gpt_path, _GRAPH_BACKSCATTER_GRD, {
         "input1": pre,
         "input2": post,
-        "aoi":    aoi,
+        "aoi":    _aoi_to_wkt(aoi),
         "output": tmp_dim,
-    })
+    }, gpt_options)
 
     if not success or not os.path.exists(tmp_dim):
         return []
@@ -615,10 +804,28 @@ def run_mosaic(inputs: list[str], output: str) -> str:
     Intended for use after ``run_gathering`` when the AOI spans multiple subswaths:
     pass the per-swath pre (or post) GeoTIFFs and receive a single mosaicked file.
 
-    If only one input is given the file is copied as-is (no Warp needed).
+    Where inputs overlap, each pixel takes the value of the input in which it
+    lies **farthest from an invalid pixel**.  Adjacent subswaths overlap by
+    1-2 km, and every per-swath product is degraded along its own swath edge:
+    SNAP leaves a 1-px line of NaN in the gamma0 bands there, and the
+    coherence bands are zeroed over a wider fringe than the backscatter ones.
+    A plain "last input wins" Warp with ``srcNodata=0`` copies the NaN line
+    over the neighbour's good data (NaN is not 0) — one black line per swath
+    edge in the mosaic.  Ranking by distance to the nearest invalid pixel
+    hands those fringes to the other swath's interior, while on the outer
+    boundary of the AOI, where only one input exists, nothing is lost.  The
+    output never holds NaN: uncovered pixels are 0, the declared nodata.
+
+    All inputs are first warped (nearest neighbour) onto the union grid of
+    the first input's CRS and resolution; with ``alignToStandardGrid`` in the
+    graphs this involves no resampling.  Everything is held in memory: for N
+    inputs of B bands over an H x W union, N x B x H x W float32.
+
+    If only one input is given the file is copied as-is.
 
     Args:
-        inputs (list[str]): Ordered list of GeoTIFF paths to mosaic.
+        inputs (list[str]): Ordered list of GeoTIFF paths to mosaic.  Band
+            layout, names and nodata (0.0) are taken from the first one.
         output (str): Output GeoTIFF path.
 
     Returns:
@@ -626,7 +833,7 @@ def run_mosaic(inputs: list[str], output: str) -> str:
 
     Raises:
         RuntimeError: If GDAL fails to build the mosaic.
-        ImportError: If osgeo.gdal is not available.
+        ImportError: If osgeo.gdal or scipy is not available.
     """
     if not inputs:
         raise ValueError("inputs must not be empty")
@@ -642,16 +849,63 @@ def run_mosaic(inputs: list[str], output: str) -> str:
         from osgeo import gdal
     except ImportError:
         raise ImportError("osgeo.gdal is required for mosaicking")
+    import numpy as np
+    from scipy import ndimage
 
     gdal.UseExceptions()
-    gdal.PushErrorHandler("CPLQuietErrorHandler")
-    ds = gdal.Warp(output, inputs, format="GTiff", resampleAlg="near",
-                   srcNodata=0.0, dstNodata=0.0)
-    gdal.PopErrorHandler()
 
-    if ds is None:
+    # Union grid: let Warp work out the extent of all inputs in the CRS and
+    # resolution of the first one, without writing anything yet.
+    union = gdal.Warp("", inputs, format="MEM", resampleAlg="near",
+                      srcNodata=0.0, dstNodata=0.0)
+    if union is None:
         raise RuntimeError(f"Mosaic failed → {output!r}")
-    ds = None
+    gt, proj = union.GetGeoTransform(), union.GetProjection()
+    width, height, n_bands = union.RasterXSize, union.RasterYSize, union.RasterCount
+    x_min, y_max = gt[0], gt[3]
+    x_max, y_min = x_min + width * gt[1], y_max + height * gt[5]
+    union = None
+
+    # Each input on that grid, plus its distance-to-nodata map
+    stack, dist = [], []
+    for path in inputs:
+        ds = gdal.Warp("", path, format="MEM", resampleAlg="near",
+                       outputBounds=(x_min, y_min, x_max, y_max),
+                       xRes=abs(gt[1]), yRes=abs(gt[5]), dstSRS=proj,
+                       srcNodata=0.0, dstNodata=0.0)
+        arr = ds.ReadAsArray().astype(np.float32)      # (bands, H, W)
+        ds = None
+        if arr.ndim == 2:
+            arr = arr[None]
+        # Valid = every band finite and non-zero.  SNAP leaves NaN (not 0)
+        # in the gamma0 bands along the swath edge — a 1-px line that Warp's
+        # srcNodata=0 would happily copy — and the coherence window zeroes a
+        # wider fringe than the backscatter one: a pixel counts only where all
+        # bands are usable, so the other swath's interior wins there.
+        valid = np.isfinite(arr).all(axis=0) & (arr != 0).all(axis=0)
+        # Distance (pixels) to the nearest invalid pixel; 0 where invalid
+        dist.append(ndimage.distance_transform_edt(valid))
+        stack.append(arr)
+
+    dist = np.stack(dist)                               # (N, H, W)
+    stack = np.stack(stack)                             # (N, bands, H, W)
+    best = np.argmax(dist, axis=0)                      # (H, W): winning input
+    mosaic = np.take_along_axis(stack, best[None, None], axis=0)[0]
+    mosaic[:, dist.max(axis=0) == 0] = 0.0              # covered by no input: nodata, never NaN
+
+    # Write, carrying over band names and the nodata declaration
+    src = gdal.Open(inputs[0])
+    driver = gdal.GetDriverByName("GTiff")
+    out = driver.Create(output, width, height, n_bands, gdal.GDT_Float32)
+    out.SetGeoTransform(gt)
+    out.SetProjection(proj)
+    for i in range(n_bands):
+        band = out.GetRasterBand(i + 1)
+        band.WriteArray(mosaic[i])
+        band.SetDescription(src.GetRasterBand(i + 1).GetDescription())
+        band.SetNoDataValue(0.0)
+    out.FlushCache()
+    out = src = None
     return output
 
 
@@ -668,7 +922,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "  coherence        — coherence via ESD coregistration\n"
             "  gathering        — collocate backscatter + coherence into pre/post products\n\n"
             "Subcommands (GRD pipeline):\n"
-            "  backscatter-grd  — Gamma0 backscatter from two GRD products (no subswath split)\n"
+            "  backscatter-grd  — Gamma0 backscatter from two GRD products (no subswath split)\n\n"
+            "Utility:\n"
+            "  mosaic           — merge per-subswath GeoTIFFs into one (no GPT involved)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -680,6 +936,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})",
     )
+    add_gpt_options(common)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -704,11 +961,12 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="[required] Master SLC product — should be pre2 (.zip or .SAFE)")
     p_bs.add_argument("--input2", required=True, metavar="PATH",
                       help="[required] Secondary SLC product — should be post1 (.zip or .SAFE)")
-    p_bs.add_argument("--aoi", required=True, metavar="WKT",
+    p_bs.add_argument("--aoi", required=True, metavar="WKT_OR_FILE",
                       help=(
-                          "[required] Area of interest as a WKT polygon in WGS84.  Used to locate "
-                          'the correct subswath/burst range and to clip the output.  '
-                          'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                          "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                          '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                          "WKT / GeoJSON file.  Used to locate the correct subswath/burst range "
+                          "and to clip the output."
                       ))
     p_bs.add_argument("--output", default=None, metavar="PATH",
                       help=(
@@ -727,7 +985,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "estimation, deburst, terrain correction, and spatial clipping.\n\n"
             "The subswath and burst range are determined automatically from --aoi.\n"
             "If the AOI spans multiple subswaths the graph runs once per subswath\n"
-            "and each output is suffixed with its name (e.g. coherence_pre_IW2.dim).\n\n"
+            "and each output is suffixed with its name (e.g. coherence_pre_IW2.dim).\n"
+            "A subswath reduced to a single burst is processed with\n"
+            "coherence_one_burst.xml (same graph without Enhanced-Spectral-Diversity,\n"
+            "which needs the overlap between two consecutive bursts).\n\n"
             "Two output modes:\n"
             "  No --pair : standalone run → data/preprocessed/default/coh[_IWx].dim\n"
             "              (or the path given with --output)\n"
@@ -740,10 +1001,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="[required] Master SLC product (.zip or .SAFE)")
     p_coh.add_argument("--input2", required=True, metavar="PATH",
                        help="[required] Secondary SLC product (.zip or .SAFE)")
-    p_coh.add_argument("--aoi", required=True, metavar="WKT",
+    p_coh.add_argument("--aoi", required=True, metavar="WKT_OR_FILE",
                        help=(
-                           "[required] Area of interest as a WKT polygon in WGS84.  "
-                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                           "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                           '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                           "WKT / GeoJSON file."
                        ))
     p_coh.add_argument("--pair", default=None, choices=["pre", "post"],
                        help=(
@@ -811,10 +1073,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="[required] Pre-event GRD product (.zip or .SAFE) — used as master")
     p_grd.add_argument("--post",   required=True, metavar="PATH",
                        help="[required] Post-event GRD product (.zip or .SAFE) — used as slave")
-    p_grd.add_argument("--aoi",    required=True, metavar="WKT",
+    p_grd.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                        help=(
-                           "[required] Area of interest as a WKT polygon in WGS84.  "
-                           'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                           "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                           '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                           "WKT / GeoJSON file."
                        ))
     p_grd.add_argument("--output", default=None, metavar="NAME",
                        help=(
@@ -823,12 +1086,39 @@ def _build_parser() -> argparse.ArgumentParser:
                            "If omitted, writes pre.tif and post.tif to data/preprocessed/default/."
                        ))
 
+    # -- mosaic --------------------------------------------------------------
+    # No GPT here, so no --gpt / memory flags: not built on `common`.
+    p_mo = subparsers.add_parser(
+        "mosaic",
+        help="Merge per-subswath GeoTIFFs (same bands) into a single file",
+        description=(
+            "Merge two or more GeoTIFFs with the same bands — typically the per-subswath\n"
+            "outputs of gathering (<name>_IW1_pre.tif, <name>_IW2_pre.tif, ...) — into one.\n\n"
+            "Where inputs overlap, each pixel is taken from the input in which it lies\n"
+            "farthest from an invalid pixel, so the degraded swath edges (a 1-px NaN line\n"
+            "in gamma0, a zeroed fringe in coherence) are replaced by the neighbour's\n"
+            "interior instead of being painted over it.  Band names and nodata (0) are\n"
+            "carried over from the first input.  Everything is held in memory."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_mo.add_argument("--inputs", required=True, nargs="+", metavar="PATH",
+                      help="[required] Two or more GeoTIFFs to merge, e.g. zta_IW2_pre.tif zta_IW3_pre.tif")
+    p_mo.add_argument("--output", required=True, metavar="PATH",
+                      help="[required] Output GeoTIFF path")
+
     return parser
 
 
 def main():
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.command == "mosaic":
+        print(run_mosaic(args.inputs, args.output))
+        return
+
+    gpt_options = gpt_options_from_args(args)
 
     if args.command == "backscatter":
         run_backscatter(
@@ -837,6 +1127,7 @@ def main():
             aoi=args.aoi,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "coherence":
         run_coherence(
@@ -846,6 +1137,7 @@ def main():
             pair=args.pair,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "gathering":
         run_gathering(
@@ -854,6 +1146,7 @@ def main():
             input_coh_post=args.input_coh_post,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
     elif args.command == "backscatter-grd":
         tifs = run_backscatter_grd(
@@ -862,6 +1155,7 @@ def main():
             aoi=args.aoi,
             output=args.output,
             gpt_path=args.gpt,
+            gpt_options=gpt_options,
         )
         for path in tifs:
             print(path)

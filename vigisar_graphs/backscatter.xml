@@ -256,7 +256,16 @@
       <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
       <pixelSpacingInDegree>1.0382554916158415E-5</pixelSpacingInDegree>
       <mapProjection>AUTO:42001</mapProjection>
-      <alignToStandardGrid>false</alignToStandardGrid>
+      <!-- Standard grid: snap the output grid so that pixel edges fall on
+           multiples of pixelSpacingInMeter counted from (0, 0) of the map CRS
+           (UTM easting/northing). Terrain-Correction interpolates exactly
+           once either way; this only fixes WHERE the grid is laid, instead of
+           at the product's own bounding-box corner. Every product of the same
+           UTM zone (other sub-swaths, other dates, coherence vs backscatter)
+           then lands on the same grid: mosaicking and Collocate become pure
+           copies, no second resampling. Same as GDAL's -tap. Products made
+           before this was switched on sit a fraction of a pixel off. -->
+      <alignToStandardGrid>true</alignToStandardGrid>
       <standardGridOriginX>0.0</standardGridOriginX>
       <standardGridOriginY>0.0</standardGridOriginY>
       <nodataValueAtSea>true</nodataValueAtSea>

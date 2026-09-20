@@ -2,9 +2,15 @@ import argparse
 import os
 
 try:
-    from .run_graphs import run_backscatter_grd, DEFAULT_GPT, _PREPROCESSED_DIR
+    from .run_graphs import (
+        run_backscatter_grd, GptOptions, add_gpt_options, gpt_options_from_args,
+        DEFAULT_GPT, DEFAULT_GPT_OPTIONS, _PREPROCESSED_DIR,
+    )
 except ImportError:
-    from run_graphs import run_backscatter_grd, DEFAULT_GPT, _PREPROCESSED_DIR  # type: ignore[no-redef]
+    from run_graphs import (  # type: ignore[no-redef]
+        run_backscatter_grd, GptOptions, add_gpt_options, gpt_options_from_args,
+        DEFAULT_GPT, DEFAULT_GPT_OPTIONS, _PREPROCESSED_DIR,
+    )
 
 
 def main_preprocess_grd(
@@ -13,6 +19,7 @@ def main_preprocess_grd(
     aoi: str,
     output_name: str,
     gpt_path: str = DEFAULT_GPT,
+    gpt_options: GptOptions = DEFAULT_GPT_OPTIONS,
 ) -> dict:
     """
     GRD-only Vigisar SAR preprocessing pipeline.
@@ -38,7 +45,8 @@ def main_preprocess_grd(
     Args:
         pre (str): Path to the pre-event Sentinel-1 GRD product (.zip or .SAFE).
         post (str): Path to the post-event Sentinel-1 GRD product (.zip or .SAFE).
-        aoi (str): Area of interest as a WKT polygon in WGS84.
+        aoi (str): Area of interest in lon/lat WGS84 — inline WKT, or a path
+            to a WKT / GeoJSON file.
         output_name (str): Label for this run (e.g. ``"zta1"``), or a path.
 
             * Simple name (``"zta1"``) — a folder ``data/preprocessed/zta1/``
@@ -47,6 +55,8 @@ def main_preprocess_grd(
               written inside that directory (created if needed), using the
               last segment (``zta6_grd``) as filename prefix.
         gpt_path (str): Path to the SNAP GPT executable.
+        gpt_options (GptOptions): Heap / cache / threads / tile size handed to
+            gpt (see the top of ``run_graphs.py`` for how to choose them).
 
     Returns:
         dict: ``{"pre": <path>, "post": <path>}`` — absolute paths of the
@@ -67,7 +77,8 @@ def main_preprocess_grd(
     os.makedirs(out_dir, exist_ok=True)
 
     gather_prefix = os.path.join(out_dir, prefix)
-    tifs = run_backscatter_grd(pre, post, aoi, output=gather_prefix, gpt_path=gpt_path)
+    tifs = run_backscatter_grd(pre, post, aoi, output=gather_prefix, gpt_path=gpt_path,
+                               gpt_options=gpt_options)
 
     if len(tifs) < 2:
         raise RuntimeError(
@@ -110,10 +121,11 @@ def main():
                         help="[required] Pre-event GRD product (.zip or .SAFE)")
     parser.add_argument("--post",   required=True, metavar="PATH",
                         help="[required] Post-event GRD product (.zip or .SAFE)")
-    parser.add_argument("--aoi",    required=True, metavar="WKT",
+    parser.add_argument("--aoi",    required=True, metavar="WKT_OR_FILE",
                         help=(
-                            "[required] Area of interest as a WKT polygon in WGS84.  "
-                            'Must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))"'
+                            "[required] Area of interest in lon/lat WGS84: an inline WKT polygon "
+                            '(must be quoted: --aoi "POLYGON ((-54.1 4.1, ...))") or a path to a '
+                            "WKT / GeoJSON file.  Used to clip the outputs."
                         ))
     parser.add_argument("--output", required=True, metavar="NAME_OR_PATH",
                         help=(
@@ -126,6 +138,7 @@ def main():
                         ))
     parser.add_argument("--gpt",    default=DEFAULT_GPT, metavar="PATH",
                         help=f"[optional] Path to the SNAP GPT executable (default: {DEFAULT_GPT!r})")
+    add_gpt_options(parser)
 
     args = parser.parse_args()
     result = main_preprocess_grd(
@@ -134,6 +147,7 @@ def main():
         aoi=args.aoi,
         output_name=args.output,
         gpt_path=args.gpt,
+        gpt_options=gpt_options_from_args(args),
     )
     print(f"Pre-event product : {result['pre']}")
     print(f"Post-event product: {result['post']}")

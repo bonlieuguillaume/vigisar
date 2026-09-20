@@ -39,9 +39,23 @@ This module allows you to validate your results against reference data so as to 
 
 ### 3. SAR Preprocessing (`src/preprocess/`)
 Turns raw Sentinel-1 products into the pre/post GeoTIFFs consumed by the detection pipeline, by running SNAP GPT graphs stored in `vigisar_graphs/`:
-- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`.
+- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`. The sub-swaths and burst range to process are found automatically from the AOI by `polygon_to_swaths_bursts.py` (footprints rebuilt from the annotation XML, no image data read — see `src/preprocess/readme_polygon_to_swaths_bursts.md`). When a sub-swath keeps a single burst, coherence runs `coherence_one_burst.xml` — `coherence.xml` without its Enhanced-Spectral-Diversity node, which needs the overlap between two consecutive bursts and yields an empty product otherwise. Keep the two graphs in sync.
 - **GRD workflow** (`main_preprocess_grd.py`): backscatter only (`gamma0_VH`, `gamma0_VV`).
+- The `--aoi` of every entry point takes either an inline WKT polygon or a path to a WKT / GeoJSON file, in lon/lat WGS84.
 
+> **GPT memory & performance.** Every entry point (`main_preprocess.py`, `main_preprocess_grd.py`, `run_graphs.py <subcommand>`) takes four flags that are passed to each `gpt` call and **override SNAP's own configuration** (`gpt.vmoptions`, `snap.properties`, the GUI settings do not apply). Defaults suit a 32 GB / 8-core machine; the full rationale is in the comment block at the top of `src/preprocess/run_graphs.py`.
+>
+> | Flag | Default | What it is | How to choose |
+> | --- | --- | --- | --- |
+> | `--xmx` | `21G` | Java heap ceiling: cache **and** operator working memory must fit under it | ~2/3 of the RAM. Too low → Java OutOfMemoryError on large AOIs; too high → the machine swaps and gpt dies with an `hs_err_pid*.log` |
+> | `--cache` | `8192M` | tile cache, *inside* the heap; keeps computed tiles so they are not recomputed | 1/4–1/3 of `--xmx`. Too small only costs time, never crashes; too big fills up and starves the operators. First lever on large AOIs |
+> | `--threads` | `16` | tiles computed in parallel | ≤ hardware threads; the number of physical cores when memory is tight (SNAP scales poorly beyond ~8). Second lever |
+> | `--tile-size` | `512` | edge of the square tiles, pixels | a power of two (256/512/1024), to match the block size of files on disk and of pyramid levels. Leave at 512 unless you know why |
+>
+> Example, a large AOI on a 16 GB laptop: `python src/preprocess/main_preprocess.py ... --xmx 10G --cache 3G --threads 4`.
+
+> **Output grid.** Every `Terrain-Correction` node runs with `alignToStandardGrid=true` (origin 0,0): the 10 m output grid is snapped so that pixel edges fall on multiples of 10 m of the UTM easting/northing, instead of starting at each product's own bounding-box corner. Terrain-Correction interpolates exactly once either way — this only fixes *where* the grid is laid — but all products of the same UTM zone (sub-swaths, dates, backscatter vs coherence) then share one grid: `run_mosaic` and `Collocate` copy pixels instead of resampling them, and it is the same grid as GDAL's `-tap` or Sentinel-2's 10 m tiles. Products generated before this switch sit a fraction of a pixel off the new ones — regenerate them before mixing.
+>
 > **Band naming & master/slave conventions.** SNAP band names (dates, `_mst`/`_slv`, subswath) are unreliable, so the pipeline never parses them: it relies on the **order of the sources** in the graphs (first source = master, bands written first) and on Collocate suffixes (`_M`, `_S0`, `_S1`) that are *predicted* by the Python code. These couplings and the resulting conventions are documented **directly inside the graph files** — see the header comment of `vigisar_graphs/gathering.xml` and the comments on the `CreateStack` / `Back-Geocoding` nodes in `backscatter.xml`, `backscatter_grd.xml` and `coherence.xml`, as well as the docstring of `_resolve_gathering_bands` in `src/preprocess/run_graphs.py`. Read them before editing a graph or re-saving it from SNAP's Graph Builder.
 
 
