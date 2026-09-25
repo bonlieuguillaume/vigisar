@@ -43,7 +43,7 @@ from skimage.morphology import (closing,
 
 ########## NODATA HANDLING ##########
 
-def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, -3.4028235e38), profile: dict | None = None) -> np.ndarray:
+def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, np.finfo(np.float32).min), profile: dict | None = None) -> np.ndarray:
     """
     Replace NoData values by NaN.
 
@@ -52,7 +52,13 @@ def to_nan(arr: np.ndarray, nodata_values=(-9999, -32768, -3.4028235e38), profil
     arr : np.ndarray
         Input array (any dtype).
     nodata_values : tuple of numbers, optional
-        Values to treat as NoData and convert to NaN.
+        Values to treat as NoData and convert to NaN, on top of the declared
+        one.  The last default is the lowest float32 (about -3.4e38), ArcGIS's
+        NoData for float32 rasters: it must be written np.finfo(np.float32).min,
+        the exact float32 value.  The literal -3.4028235e38 is a float64 lying
+        just beyond the float32 range, so numpy 1.x compares the float32 array
+        to it in float64 and the upcast data (-3.4028234663852886e38) never
+        equals it: those pixels would silently stay as data.
     profile : dict, optional
         Rasterio profile of the raster `arr` was read from.  If it declares a
         NoData value (profile["nodata"]), that value is converted too.  This is
