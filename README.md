@@ -1,6 +1,6 @@
 # Sentinel-1 Change Detection Toolbox
 
-This toolbox is designed for unsupervised deforestation detection using Sentinel-1 SAR imagery. It provides a pipeline processing orthorectified SAR under geotiff format (might be updated in the future to take in raw S1 SLC files as input) into binary change masks.
+This toolbox is designed for unsupervised deforestation detection using Sentinel-1 SAR imagery. It provides a pipeline processing orthorectified SAR under geotiff format into binary change masks. Any source of co-registered pre/post GeoTIFFs works; the **rosarium** repository is one that produces them from raw Sentinel-1 products (see *Input data* below).
 
 ---
 
@@ -23,7 +23,7 @@ This toolbox is designed for unsupervised deforestation detection using Sentinel
 
 ## 🚀 Very quick review of the main 
 
-The toolbox is divided into three main modules:
+The toolbox is divided into two main modules:
 
 ### 1. Detection Pipeline (`main_dtod_test.py`)
 The `main()` function handles the core logic:
@@ -37,25 +37,24 @@ This module allows you to validate your results against reference data so as to 
 - **Rasterization:** Convert polygon shapefiles into binary masks aligned with your imagery.
 - **Metrics:** Compute statistical performance indicators including **F1-Score**, **MCC** (Matthews Correlation Coefficient), and **Kappa**.
 
-### 3. SAR Preprocessing (`src/preprocess/`)
-Turns raw Sentinel-1 products into the pre/post GeoTIFFs consumed by the detection pipeline, by running SNAP GPT graphs stored in `vigisar_graphs/`:
-- **SLC workflow** (`main_preprocess.py`): backscatter stack + pre/post coherence, then gathering into `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`. The sub-swaths and burst range to process are found automatically from the AOI by `polygon_to_swaths_bursts.py` (footprints rebuilt from the annotation XML, no image data read — see `src/preprocess/readme_polygon_to_swaths_bursts.md`). When a sub-swath keeps a single burst, coherence runs `coherence_one_burst.xml` — `coherence.xml` without its Enhanced-Spectral-Diversity node, which needs the overlap between two consecutive bursts and yields an empty product otherwise. Keep the two graphs in sync.
-- **GRD workflow** (`main_preprocess_grd.py`): backscatter only (`gamma0_VH`, `gamma0_VV`).
-- The `--aoi` of every entry point takes either an inline WKT polygon or a path to a WKT / GeoJSON file, in lon/lat WGS84.
+---
 
-> **GPT memory & performance.** Every entry point (`main_preprocess.py`, `main_preprocess_grd.py`, `run_graphs.py <subcommand>`) takes four flags that are passed to each `gpt` call and **override SNAP's own configuration** (`gpt.vmoptions`, `snap.properties`, the GUI settings do not apply). Defaults suit a 32 GB / 8-core machine; the full rationale is in the comment block at the top of `src/preprocess/run_graphs.py`.
->
-> | Flag | Default | What it is | How to choose |
-> | --- | --- | --- | --- |
-> | `--xmx` | `21G` | Java heap ceiling: cache **and** operator working memory must fit under it | ~2/3 of the RAM. Too low → Java OutOfMemoryError on large AOIs; too high → the machine swaps and gpt dies with an `hs_err_pid*.log` |
-> | `--cache` | `8192M` | tile cache, *inside* the heap; keeps computed tiles so they are not recomputed | 1/4–1/3 of `--xmx`. Too small only costs time, never crashes; too big fills up and starves the operators. First lever on large AOIs |
-> | `--threads` | `16` | tiles computed in parallel | ≤ hardware threads; the number of physical cores when memory is tight (SNAP scales poorly beyond ~8). Second lever |
-> | `--tile-size` | `512` | edge of the square tiles, pixels | a power of two (256/512/1024), to match the block size of files on disk and of pyramid levels. Leave at 512 unless you know why |
->
-> Example, a large AOI on a 16 GB laptop: `python src/preprocess/main_preprocess.py ... --xmx 10G --cache 3G --threads 4`.
+## 🛰️ Input data
 
-> **Output grid.** Every `Terrain-Correction` node runs with `alignToStandardGrid=true` (origin 0,0): the 10 m output grid is snapped so that pixel edges fall on multiples of 10 m of the UTM easting/northing, instead of starting at each product's own bounding-box corner. Terrain-Correction interpolates exactly once either way — this only fixes *where* the grid is laid — but all products of the same UTM zone (sub-swaths, dates, backscatter vs coherence) then share one grid: `run_mosaic` and `Collocate` copy pixels instead of resampling them, and it is the same grid as GDAL's `-tap` or Sentinel-2's 10 m tiles. Products generated before this switch sit a fraction of a pixel off the new ones — regenerate them before mixing.
->
-> **Band naming & master/slave conventions.** SNAP band names (dates, `_mst`/`_slv`, subswath) are unreliable, so the pipeline never parses them: it relies on the **order of the sources** in the graphs (first source = master, bands written first) and on Collocate suffixes (`_M`, `_S0`, `_S1`) that are *predicted* by the Python code. These couplings and the resulting conventions are documented **directly inside the graph files** — see the header comment of `vigisar_graphs/gathering.xml` and the comments on the `CreateStack` / `Back-Geocoding` nodes in `backscatter.xml`, `backscatter_grd.xml` and `coherence.xml`, as well as the docstring of `_resolve_gathering_bands` in `src/preprocess/run_graphs.py`. Read them before editing a graph or re-saving it from SNAP's Graph Builder.
+The detection takes two co-registered GeoTIFFs, one before and one after the event, **whatever produced them**: gamma0, coherence, or both, from SNAP, another toolbox or a provider. What it relies on:
+
+- **the same layout in both files** — same bands in the same order, same CRS, same data type, and even the same storage options (driver, compression, tiling, interleave): the two rasterio profiles are compared key by key and must match, apart from the size, where one row or column of difference is tolerated (padded, then cropped back). Two files from different sources may need a `gdal_translate` to a common layout first;
+- **co-registration** — pre and post on the same grid, pixel for pixel: the pipeline does not resample;
+- **nodata declared** in the file (`nodata` tag), or one of -9999, -32768, -3.4e38 — those pixels become NaN and are ignored; an undeclared 0 would be taken as data;
+- **any number of bands, of any kind** — each band is clipped and normalised on its own, then the dissimilarity is the distance between the pre and post band vectors of each pixel. The scale (linear or dB) is not imposed, but it changes the distribution the thresholding sees, so keep the one the parameters were tuned on.
+
+**From raw Sentinel-1 products**, the sister repository **rosarium** covers the chain upstream — search, download, SNAP preprocessing — and writes exactly that:
+
+- `python rosarium.py pre_post backscatter_coherence` — four SLC (two pre, two post) → `<name>_pre.tif` / `<name>_post.tif` with bands `gamma0_VH`, `gamma0_VV`, `coh_VH`, `coh_VV`;
+- `python rosarium.py pre_post backscatter` — two GRD (pre, post) → the same two files with the two `gamma0` bands only.
+
+Its outputs are in linear scale, with nodata = 0 declared on every band, on a 10 m UTM grid snapped on multiples of 10 m (`alignToStandardGrid`). Products generated before that grid alignment was switched on sit a fraction of a pixel off newer ones — regenerate them before mixing the two.
+
+The preprocessing used to live here (`src/preprocess/`, `vigisar_graphs/`, `utils/parallel_download.py`); it moved to rosarium, where its documentation is (`features/snap_gpt/README.md` for the graphs, the GPT memory flags and the band conventions).
 
 
